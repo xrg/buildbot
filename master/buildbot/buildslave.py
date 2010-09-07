@@ -7,9 +7,8 @@ from zope.interface import implements
 from twisted.python import log
 from twisted.internet import defer, reactor
 from twisted.application import service
-import twisted.spread.pb
+from twisted.spread import pb
 
-from buildbot.pbutil import NewCredPerspective
 from buildbot.status.builder import SlaveStatus
 from buildbot.status.mail import MailNotifier
 from buildbot.interfaces import IBuildSlave, ILatentBuildSlave
@@ -20,7 +19,7 @@ import sys
 if sys.version_info[:3] < (2,4,0):
     from sets import Set as set
 
-class AbstractBuildSlave(NewCredPerspective, service.MultiService):
+class AbstractBuildSlave(pb.Avatar, service.MultiService):
     """This is the master-side representative for a remote buildbot slave.
     There is exactly one for each slave described in the config file (the
     c['slaves'] list). When buildbots connect in (.attach), they get a
@@ -164,6 +163,13 @@ class AbstractBuildSlave(NewCredPerspective, service.MultiService):
             self.missing_timer = reactor.callLater(self.missing_timeout,
                                                    self._missing_timer_fired)
 
+    def recordConnectTime(self):
+        if self.slave_status:
+            self.slave_status.recordConnectTime()
+
+    def isConnected(self):
+        return self.slave
+
     def _missing_timer_fired(self):
         self.missing_timer = None
         # notify people, but only if we're still in the config
@@ -208,26 +214,12 @@ class AbstractBuildSlave(NewCredPerspective, service.MultiService):
     def attached(self, bot):
         """This is called when the slave connects.
 
-        @return: a Deferred that fires with a suitable pb.IPerspective to
-                 give to the slave (i.e. 'self')"""
+        @return: a Deferred that fires when the attachment is complete
+        """
 
-        if self.slave:
-            # uh-oh, we've got a duplicate slave. The most likely
-            # explanation is that the slave is behind a slow link, thinks we
-            # went away, and has attempted to reconnect, so we've got two
-            # "connections" from the same slave, but the previous one is
-            # stale. Give the new one precedence.
-            log.msg("duplicate slave %s replacing old one" % self.slavename)
+        # the botmaster should ensure this.
+        assert not self.isConnected()
 
-            # just in case we've got two identically-configured slaves,
-            # report the IP addresses of both so someone can resolve the
-            # squabble
-            tport = self.slave.broker.transport
-            log.msg("old slave was connected from", tport.getPeer())
-            log.msg("new slave is from", bot.broker.transport.getPeer())
-            d = self.disconnect()
-        else:
-            d = defer.succeed(None)
         # now we go through a sequence of calls, gathering information, then
         # tell the Botmaster that it can finally give this slave to all the
         # Builders that care about it.
@@ -241,6 +233,7 @@ class AbstractBuildSlave(NewCredPerspective, service.MultiService):
         # We want to know when the graceful shutdown flag changes
         self.slave_status.addGracefulWatcher(self._gracefulChanged)
 
+        d = defer.succeed(None)
         def _log_attachment_on_slave(res):
             d1 = bot.callRemote("print", "attached")
             d1.addErrback(lambda why: None)
@@ -473,7 +466,7 @@ class AbstractBuildSlave(NewCredPerspective, service.MultiService):
             # it's because the connection was lost, that means the slave
             # shutdown as expected.
             def _errback(why):
-                if why.check(twisted.spread.pb.PBConnectionLost):
+                if why.check(pb.PBConnectionLost):
                     log.msg("Lost connection to %s" % self.slavename)
                 else:
                     log.err("Unexpected error when trying to shutdown %s" % self.slavename)

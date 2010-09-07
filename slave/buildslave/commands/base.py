@@ -1,6 +1,7 @@
 
 import os, signal, types, re, traceback
 from stat import ST_CTIME, ST_MTIME, ST_SIZE
+import os
 import sys
 import shutil
 
@@ -16,7 +17,7 @@ from buildslave.commands import utils
 # this used to be a CVS $-style "Revision" auto-updated keyword, but since I
 # moved to Darcs as the primary repository, this is updated manually each
 # time this file is changed. The last cvs_ver that was here was 1.51 .
-command_version = "2.9"
+command_version = "2.11"
 
 # version history:
 #  >=1.17: commands are interruptable
@@ -43,6 +44,7 @@ command_version = "2.9"
 #  >= 2.8: added username and password args to SVN class
 #  >= 2.9: add depth arg to SVN class
 #  >= 2.10: CVS can handle 'extra_options' and 'export_options'
+#  >= 2.11: Arch, Bazaar, and Monotone removed
 
 class Command:
     implements(ISlaveCommand)
@@ -229,8 +231,22 @@ class SourceBaseCommand(Command):
         self.timeout = args.get('timeout', 120)
         self.maxTime = args.get('maxTime', None)
         self.retry = args.get('retry')
+        self._commandPaths = {}
         # VC-specific subclasses should override this to extract more args.
         # Make sure to upcall!
+
+    def getCommand(self, name):
+        """Wrapper around utils.getCommand that will output a resonable
+        error message and raise AbandonChain if the command cannot be
+        found"""
+        if name not in self._commandPaths:
+            try:
+                self._commandPaths[name] = utils.getCommand(name)
+            except RuntimeError:
+                self.sendStatus({'stderr' : "could not find '%s'\n" % name})
+                self.sendStatus({'stderr' : "PATH is '%s'\n" % os.environ.get('PATH', '')})
+                raise AbandonChain(-1)
+        return self._commandPaths[name]
 
     def start(self):
         self.sendStatus({'header': "starting " + self.header + "\n"})

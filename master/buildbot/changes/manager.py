@@ -35,6 +35,8 @@
 #
 # ***** END LICENSE BLOCK *****
 
+import time
+
 from zope.interface import implements
 from twisted.python import log
 from twisted.internet import defer
@@ -78,12 +80,15 @@ class ChangeManager(service.MultiService):
 
     implements(interfaces.IEventSource)
 
-    changeHorizon = 0
+    changeHorizon = None
+    lastPruneChanges = None
     name = "changemanager"
 
     def __init__(self):
         service.MultiService.__init__(self)
         self._cache = util.LRUCache()
+        self.lastPruneChanges = 0
+        self.changeHorizon = 0
 
     def addSource(self, source):
         assert interfaces.IChangeSource.providedBy(source)
@@ -97,21 +102,32 @@ class ChangeManager(service.MultiService):
     def addChange(self, change):
         """Deliver a file change event. The event should be a Change object.
         This method will timestamp the object as it is received."""
-        log.msg("adding change, who %s, %d files, rev=%s, branch=%s, repository=%s, "
+        msg = ("adding change, who %s, %d files, rev=%s, branch=%s, repository=%s, "
                 "comments %s, category %s" % (change.who, len(change.files),
                                               change.revision, change.branch, change.repository,
                                               change.comments, change.category))
-
-        #self.pruneChanges() # use self.changeHorizon
-        # for now, add these in the background, without waiting for it. TODO:
-        # return a Deferred.
-        #self.queue.add(db.runInteraction, self.addChangeToDatabase, change)
+        log.msg(msg.encode('utf-8', 'replace'))
 
         # this sets change.number, if it wasn't already set (by the
         # migration-from-pickle code). It also fires a notification which
         # wakes up the Schedulers.
         self.parent.addChange(change)
 
+        self.pruneChanges(change.number)
+
+    def pruneChanges(self, last_added_changeid):
+        # this is an expensive operation, so only do it once per second, in case
+        # addChanges is called frequently
+        print "HERE, last =", last_added_changeid
+        if not self.changeHorizon or self.lastPruneChanges > time.time() - 1:
+            return
+        self.lastPruneChanges = time.time()
+
+        ids = self.parent.db.getChangeIdsLessThanIdNow(last_added_changeid - self.changeHorizon + 1)
+        print "ids", ids
+        for changeid in ids:
+            log.msg("removing change with id %s" % changeid)
+            self.parent.db.removeChangeNow(changeid)
 
     # IEventSource methods
 
