@@ -283,3 +283,16 @@ class DBSpec(object):
         if self.dbapiName == "MySQLdb":
             default = 60
         return self.connkw.get("max_idle", default)
+        
+    def get_connector(self):
+        import connector
+        return connector.DBConnector(self)
+        
+    def get_schemaManager(self, basedir):
+        from schema import manager
+        return manager.DBSchemaManager(self, basedir)
+
+cur_dbspec = DBSpec
+
+def get_dbspec():
+    return cur_dbspec

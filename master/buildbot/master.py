@@ -26,7 +26,7 @@ from buildbot import interfaces, locks
 from buildbot.process.properties import Properties
 from buildbot.config import BuilderConfig
 from buildbot.process.builder import BuilderControl
-from buildbot.db.dbspec import DBSpec
+from buildbot.db.dbspec import get_dbspec
 from buildbot.db import connector, exceptions
 from buildbot.db.schema.manager import DBSchemaManager
 from buildbot.schedulers.manager import SchedulerManager
@@ -973,8 +973,8 @@ class BuildMaster(service.MultiService):
             return
 
         # make sure it's up to date
-        sm = DBSchemaManager(db_spec, self.basedir)
-        if not sm.is_current():
+        sm = db_spec.get_schemaManager(self.basedir)
+        if sm and not sm.is_current():
             raise exceptions.DatabaseNotReadyError, textwrap.dedent("""
                 The Buildmaster database needs to be upgraded before this version of buildbot
                 can run.  Use the following command-line
@@ -982,7 +982,7 @@ class BuildMaster(service.MultiService):
                 to upgrade the database, and try starting the buildmaster again.  You may want
                 to make a backup of your buildmaster before doing so.""")
 
-        self.db = connector.DBConnector(db_spec)
+        self.db = db_spec.get_connector()
         if self.changeCacheSize:
             self.db.setChangeCacheSize(self.changeCacheSize)
         self.db.start()
@@ -1017,7 +1017,7 @@ class BuildMaster(service.MultiService):
     def loadConfig_Database(self, db_url, db_poll_interval):
         self.db_url = db_url
         self.db_poll_interval = db_poll_interval
-        db_spec = DBSpec.from_url(db_url, self.basedir)
+        db_spec = get_dbspec().from_url(db_url, self.basedir)
         self.loadDatabase(db_spec, db_poll_interval)
 
     def loadConfig_Slaves(self, new_slaves):
