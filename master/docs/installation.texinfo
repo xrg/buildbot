@@ -11,6 +11,7 @@
 * Shutdown::
 * Maintenance::
 * Troubleshooting::
+* Contrib Scripts::
 @end menu
 
 @node Buildbot Components
@@ -120,6 +121,10 @@ the code in somewhere like @code{/usr/lib/python2.3/site-packages/buildbot}. It
 will also install the @code{buildbot} command-line tool in
 @code{/usr/bin/buildbot}.
 
+If the environment variable @code{$NO_INSTALL_REQS} is set to '1', then
+@code{setup.py} will not try to install Buildbot's requirements.  This is
+usually only useful when building a Buildbot package.
+
 To test this, shift to a different directory (like @code{/tmp}), and run:
 
 @example
@@ -205,6 +210,12 @@ In addition to @file{buildbot.tac}, a small @file{Makefile.sample} is
 installed. This can be used as the basis for customized daemon startup,
 @xref{Launching the daemons}.
 
+@heading Using MySQL
+
+If you want to use MySQL as the database backend for your Buildbot, add the
+@code{--db} option to the @code{create-master} invocation to specify the
+connection string for the MySQL database (@pxref{Database Specification}).
+
 @node Upgrading an Existing Buildmaster
 @section Upgrading an Existing Buildmaster
 
@@ -276,8 +287,9 @@ to your purpose, you can simply delete @code{changes.pck}.
 
 If you would like to keep the change history, then you will need to figure out
 which encoding is in use, and use @code{contrib/fix_changes_pickle_encoding.py}
-to rewrite the changes pickle into Unicode before upgrading the master.  A
-typical invocation (with Mac-Roman encoding) might look like:
+(@pxref{Contrib Scripts}) to rewrite the changes pickle into Unicode before
+upgrading the master.  A typical invocation (with Mac-Roman encoding) might
+look like:
 
 @example
 $ python $buildbot/contrib/fix_changes_pickle_encoding.py changes.pck macroman
@@ -794,3 +806,11 @@ attempt to reconnect as usual. The reconnect time will depend upon how long the
 buildmaster is offline (i.e. how far up the exponential backoff curve the
 slaves have travelled). Again, @code{buildslave restart @var{BASEDIR}} will
 speed up the process.
+
+@node Contrib Scripts
+@section Contrib Scripts
+
+While some features of Buildbot are included in the distribution, others are
+only available in @code{contrib/} in the source directory.  The latest versions
+of such scripts are available at
+@url{http://github.com/buildbot/buildbot/tree/master/master/contrib}.

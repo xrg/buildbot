@@ -13,12 +13,19 @@ from buildbot.process.properties import Properties
 from buildbot.changes.changes import Change
 from twisted.python.reflect import namedModule
 from twisted.python.log import msg,err
+from buildbot.util import json
 
 class ChangeHookResource(resource.Resource):
      # this is a cheap sort of template thingy
     contentType = "text/html; charset=utf-8"
     children    = {}
     def __init__(self, dialects={}):
+        """
+        The keys of 'dialects' select a modules to load under
+        master/buildbot/status/web/hooks/
+        The value is passed to the module's getChanges function, providing
+        configuration options to the dialect.
+        """
         self.dialects = dialects
     
     def getChild(self, name, request):
@@ -29,7 +36,7 @@ class ChangeHookResource(resource.Resource):
         Reponds to events and starts the build process
           different implementations can decide on what methods they will accept
         """
-        self.render_POST(request)
+        return self.render_POST(request)
 
     def render_POST(self, request):
         """
@@ -41,16 +48,21 @@ class ChangeHookResource(resource.Resource):
                 the http request object
         """
 
-        changes = self.getChanges( request )
+        try:
+            changes = self.getChanges( request )
+        except ValueError as err:
+            request.setResponseCode(400, err.args[0])
+            return err.args[0]
+
         msg("Payload: " + str(request.args))
         
         if not changes:
             msg("No changes found")
-            return
-        self.submitChanges( changes, request )
-        return "changes %s" % changes
+            return "no changes found"
+        submitted = self.submitChanges( changes, request )
+        return json.dumps(submitted)
 
-  
+    
     def getChanges(self, request):
         """
         Take the logic from the change hook, and then delegate it
@@ -68,7 +80,7 @@ class ChangeHookResource(resource.Resource):
         
         if not uriRE:
             msg("URI doesn't match change_hook regex: %s" % request.uri)
-            return
+            raise ValueError("URI doesn't match change_hook regex: %s" % request.uri)
         
         changes = []
         
@@ -79,23 +91,26 @@ class ChangeHookResource(resource.Resource):
             dialect = 'base'
             
         if dialect in self.dialects.keys():
-            msg("Attempting to load module buildbot.status.web.hooks" + dialect)
+            msg("Attempting to load module buildbot.status.web.hooks." + dialect)
             tempModule = namedModule('buildbot.status.web.hooks.' + dialect)
             changes = tempModule.getChanges(request,self.dialects[dialect])
             msg("Got the following changes %s" % changes)
 
         else:
-            msg("The dialect specified %s wasn't whitelisted in change_hook" % dialect)
+            m = "The dialect specified, '%s', wasn't whitelisted in change_hook" % dialect
+            msg(m)
             msg("Note: if dialect is 'base' then it's possible your URL is malformed and we didn't regex it properly")
-                
-        return changes        
+            raise ValueError(m)
+
+        return changes
                 
     def submitChanges(self, changes, request):
         # get a control object
         changeMaster = request.site.buildbot_service.master.change_svc
+        submitted = []
         for onechange in changes:
-            msg("injecting change %s" % onechange)
             changeMaster.addChange( onechange )
-        
-    
-    
+            d = onechange.asDict()
+            msg("injected change %s" % d)
+            submitted.append(d)
+        return submitted

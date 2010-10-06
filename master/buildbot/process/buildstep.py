@@ -671,8 +671,8 @@ class BuildStep:
     def getProperty(self, propname):
         return self.build.getProperty(propname)
 
-    def setProperty(self, propname, value, source="Step"):
-        self.build.setProperty(propname, value, source)
+    def setProperty(self, propname, value, source="Step", runtime=True):
+        self.build.setProperty(propname, value, source, runtime=runtime)
 
     def startStep(self, remote):
         """Begin the step. This returns a Deferred that will fire when the
@@ -769,6 +769,7 @@ class BuildStep:
                 skip = self.start()
 
             if skip == SKIPPED:
+                self.step_status.setText(self.describe(True) + ['skipped'])
                 # this return value from self.start is a shortcut
                 # to finishing the step immediately
                 reactor.callLater(0, self.finished, SKIPPED)

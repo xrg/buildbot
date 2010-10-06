@@ -53,10 +53,14 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
             # set branch and revision to most recent change
             self.branch = changes[-1].branch
             revision = changes[-1].revision
-            if not self.project:
+            if not self.project and hasattr(changes[-1], 'project'):
                 self.project = changes[-1].project
-            if not self.repository:
+            else:
+                self.project = ''
+            if not self.repository and hasattr(changes[-1], 'repository'):
                 self.repository = changes[-1].repository
+            else:
+                self.repository = ''
 
         if revision is not None:
             if isinstance(revision, int):
@@ -115,7 +119,7 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
     def getAbsoluteSourceStamp(self, got_revision):
         return SourceStamp(branch=self.branch, revision=got_revision,
                            patch=self.patch, repository=self.repository,
-                           project=self.project)
+                           project=self.project, changes=self.changes)
 
     def getText(self):
         # note: this won't work for VC systems with huge 'revision' strings

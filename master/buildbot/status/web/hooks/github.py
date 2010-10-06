@@ -22,7 +22,7 @@ from optparse import OptionParser
 from buildbot.changes.changes import Change
 import datetime
 import time
-from twisted.python.log import msg,err
+from twisted.python import log
 import calendar
 import time
 import calendar
@@ -88,7 +88,7 @@ def getChanges(request, options = None):
             repo_url = payload['repository']['url']
             private = payload['repository']['private']
             changes = process_change(payload, user, repo, repo_url)
-            msg ("Received %s changes from github" % len(changes))
+            log.msg("Received %s changes from github" % len(changes))
             return changes
         except Exception:
             logging.error("Encountered an exception:")
@@ -107,7 +107,7 @@ def process_change(payload, user, repo, repo_url):
         changes = []
         newrev = payload['after']
         refname = payload['ref']
-        msg( "in process_change" )
+        log.msg( "in process_change" )
         # We only care about regular heads, i.e. branches
         match = re.match(r"^refs\/heads\/(.+)$", refname)
         if not match:
@@ -115,14 +115,17 @@ def process_change(payload, user, repo, repo_url):
 
         branch = match.group(1)
         if re.match(r"^0*$", newrev):
-            msg("Branch `%s' deleted, ignoring" % branch)
+            log.msg("Branch `%s' deleted, ignoring" % branch)
             return []
         else: 
             for commit in payload['commits']:
                 files = []
-                files.extend(commit['added'])
-                files.extend(commit['modified'])
-                files.extend(commit['removed'])
+                if 'added' in commit.keys():
+                    files.extend(commit['added'])
+                if 'modified' in commit.keys():
+                    files.extend(commit['modified'])
+                if 'removed' in commit.keys():
+                    files.extend(commit['removed'])
                 when =  convertTime( commit['timestamp'])
                 change = {'revision': commit['id'],
                      'revlink': commit['url'],
@@ -135,7 +138,7 @@ def process_change(payload, user, repo, repo_url):
                      'properties': {'repository': repo_url},
                 }
     
-                msg("New revision: %s" % change['revision'][:8])
+                log.msg("New revision: %s" % change['revision'][:8])
                 for key, value in change.iteritems():
                     logging.debug("  %s: %s" % (key, value))
                     changeObject = Change(\
