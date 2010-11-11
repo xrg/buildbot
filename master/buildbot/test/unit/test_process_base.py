@@ -4,7 +4,7 @@ from twisted.internet import defer
 from buildbot.process.base import Build
 from buildbot.process.properties import Properties
 from buildbot.buildrequest import BuildRequest
-from buildbot.status.builder import FAILURE, SUCCESS
+from buildbot.status.builder import FAILURE, SUCCESS, WARNINGS, RETRY, EXCEPTION
 from buildbot.locks import SlaveLock, RealSlaveLock
 from buildbot.process.buildstep import BuildStep, LoggingBuildStep
 
@@ -32,6 +32,15 @@ class FakeRequest:
 
     def mergeReasons(self, others):
         return self.reason
+
+class FakeBuildStep:
+    haltOnFailure = False
+    flunkOnWarnings = False
+    flunkOnFailure = True
+    warnOnWarnings = True
+    warnOnFailure = False
+    alwaysRun = False
+    name = 'fake'
 
 class FakeMaster:
     locks = {}
@@ -233,3 +242,162 @@ class TestBuild(unittest.TestCase):
         self.assert_(('stepStarted', (), {}) in step.step_status.method_calls)
         self.assert_("Interrupted" in b.text, b.text)
         self.assertEqual(b.result, FAILURE)
+
+    def testStepDone(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        terminate = b.stepDone(SUCCESS, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, SUCCESS)
+
+    def testStepDoneHaltOnFailure(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = []
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.haltOnFailure = True
+        terminate = b.stepDone(FAILURE, step)
+        self.assertEqual(terminate, True)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneHaltOnFailureNoFlunkOnFailure(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = []
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.flunkOnFailure = False
+        step.haltOnFailure = True
+        terminate = b.stepDone(FAILURE, step)
+        self.assertEqual(terminate, True)
+        self.assertEqual(b.result, SUCCESS)
+
+    def testStepDoneFlunkOnWarningsFlunkOnFailure(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = []
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.flunkOnFailure = True
+        step.flunkOnWarnings = True
+        b.stepDone(WARNINGS, step)
+        terminate = b.stepDone(FAILURE, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneNoWarnOnWarnings(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.warnOnWarnings = False
+        terminate = b.stepDone(WARNINGS, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, SUCCESS)
+
+    def testStepDoneWarnings(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        terminate = b.stepDone(WARNINGS, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, WARNINGS)
+
+    def testStepDoneFail(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        terminate = b.stepDone(FAILURE, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneFailOverridesWarnings(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS, WARNINGS]
+        b.result = WARNINGS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        terminate = b.stepDone(FAILURE, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneWarnOnFailure(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.warnOnFailure = True
+        step.flunkOnFailure = False
+        terminate = b.stepDone(FAILURE, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, WARNINGS)
+
+    def testStepDoneFlunkOnWarnings(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.flunkOnWarnings = True
+        terminate = b.stepDone(WARNINGS, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneHaltOnFailureFlunkOnWarnings(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [SUCCESS]
+        b.result = SUCCESS
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.flunkOnWarnings = True
+        self.haltOnFailure = True
+        terminate = b.stepDone(WARNINGS, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneWarningsDontOverrideFailure(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [FAILURE]
+        b.result = FAILURE
+        b.remote = Mock()
+        step = FakeBuildStep()
+        terminate = b.stepDone(WARNINGS, step)
+        self.assertEqual(terminate, False)
+        self.assertEqual(b.result, FAILURE)
+
+    def testStepDoneRetryOverridesAnythingElse(self):
+        r = FakeRequest()
+        b = Build([r])
+        b.results = [RETRY]
+        b.result = RETRY
+        b.remote = Mock()
+        step = FakeBuildStep()
+        step.alwaysRun = True
+        b.stepDone(WARNINGS, step)
+        b.stepDone(FAILURE, step)
+        b.stepDone(SUCCESS, step)
+        terminate = b.stepDone(EXCEPTION, step)
+        self.assertEqual(terminate, True)
+        self.assertEqual(b.result, RETRY)

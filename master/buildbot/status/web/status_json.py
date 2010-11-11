@@ -31,7 +31,11 @@ FLAGS = """\
   - filter
     - Filters out null, false, and empty string, list and dict. This reduce the
       amount of useless data sent.
-
+  - callback
+    - Enable uses of JSONP as described in
+      http://en.wikipedia.org/wiki/JSON#JSONP. Note that
+      Access-Control-Allow-Origin:* is set in the HTTP response header so you
+      can use this in compatible browsers.
 """
 
 EXAMPLES = """\
@@ -170,6 +174,7 @@ class JsonResource(resource.Resource):
         data = self.content(request)
         if isinstance(data, unicode):
             data = data.encode("utf-8")
+        request.setHeader("Access-Control-Allow-Origin", "*")
         if RequestArgToBool(request, 'as_text', False):
             request.setHeader("content-type", 'text/plain')
         else:
@@ -187,8 +192,14 @@ class JsonResource(resource.Resource):
 
     def content(self, request):
         """Renders the json dictionaries."""
-        # Implement filtering at global level and every child.
+        # Supported flags.
         select = request.args.get('select')
+        as_text = RequestArgToBool(request, 'as_text', False)
+        filter_out = RequestArgToBool(request, 'filter', as_text)
+        compact = RequestArgToBool(request, 'compact', not as_text)
+        callback = request.args.get('callback')
+
+        # Implement filtering at global level and every child.
         if select is not None:
             del request.args['select']
             # Do not render self.asDict()!
@@ -217,14 +228,18 @@ class JsonResource(resource.Resource):
                 request.postpath = postpath
         else:
             data = self.asDict(request)
-        as_text = RequestArgToBool(request, 'as_text', False)
-        filter_out = RequestArgToBool(request, 'filter', as_text)
         if filter_out:
             data = FilterOut(data)
-        if RequestArgToBool(request, 'compact', not as_text):
-            return json.dumps(data, sort_keys=True, separators=(',',':'))
+        if compact:
+            data = json.dumps(data, sort_keys=True, separators=(',',':'))
         else:
-            return json.dumps(data, sort_keys=True, indent=2)
+            data = json.dumps(data, sort_keys=True, indent=2)
+        if callback:
+            # Only accept things that look like identifiers for now
+            callback = callback[0]
+            if re.match(r'^[a-zA-Z$][a-zA-Z$0-9.]*$', callback):
+                data = '%s(%s);' % (callback, data)
+        return data
 
     def asDict(self, request):
         """Generates the json dictionary.
@@ -470,20 +485,20 @@ class BuildStepsJsonResource(JsonResource):
 
     def getChild(self, path, request):
         # Dynamic childs.
-        build_set_status = None
+        build_step_status = None
         if isinstance(path, int) or _IS_INT.match(path):
-            build_set_status = self.build_status.getSteps[int(path)]
+            build_step_status = self.build_status.getSteps[int(path)]
         else:
             steps_dict = dict([(step.getName(), step)
                                for step in self.build_status.getStep()])
-            build_set_status = steps_dict.get(path)
-        if build_set_status:
+            build_step_status = steps_dict.get(path)
+        if build_step_status:
             # Create it on-demand.
-            child = BuildStepJsonResource(status, build_step_status)
+            child = BuildStepJsonResource(self.status, build_step_status)
             # Cache it.
             index = self.build_status.getSteps().index(build_step_status)
             self.putChild(str(index), child)
-            self.putChild(build_set_status.getName(), child)
+            self.putChild(build_step_status.getName(), child)
             return child
         return JsonResource.getChild(self, path, request)
 

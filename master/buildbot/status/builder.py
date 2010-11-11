@@ -812,7 +812,7 @@ class BuildStepStatus(styles.Versioned):
     # note that these are created when the Build is set up, before each
     # corresponding BuildStep has started.
     implements(interfaces.IBuildStepStatus, interfaces.IStatusEvent)
-    persistenceVersion = 2
+    persistenceVersion = 3
 
     started = None
     finished = None
@@ -824,16 +824,19 @@ class BuildStepStatus(styles.Versioned):
     updates = {}
     finishedWatchers = []
     statistics = {}
+    step_number = None
 
-    def __init__(self, parent):
+    def __init__(self, parent, step_number):
         assert interfaces.IBuildStatus(parent)
         self.build = parent
+        self.step_number = step_number
         self.logs = []
         self.urls = {}
         self.watchers = []
         self.updates = {}
         self.finishedWatchers = []
         self.statistics = {}
+        self.skipped = False
 
         self.waitingForLocks = False
 
@@ -868,6 +871,9 @@ class BuildStepStatus(styles.Versioned):
 
     def isStarted(self):
         return (self.started is not None)
+
+    def isSkipped(self):
+        return self.skipped
 
     def isFinished(self):
         return (self.finished is not None)
@@ -1023,6 +1029,9 @@ class BuildStepStatus(styles.Versioned):
         """
         self.statistics[name] = value
 
+    def setSkipped(self, skipped):
+        self.skipped = skipped
+
     def stepFinished(self, results):
         self.finished = util.now()
         self.results = results
@@ -1090,6 +1099,10 @@ class BuildStepStatus(styles.Versioned):
         if not hasattr(self, "statistics"):
             self.statistics = {}
 
+    def upgradeToVersion3(self):
+        if not hasattr(self, "step_number"):
+            self.step_number = 0
+
     def asDict(self):
         result = {}
         # Constant
@@ -1105,6 +1118,7 @@ class BuildStepStatus(styles.Versioned):
         result['expectations'] = self.getExpectations()
         result['eta'] = self.getETA()
         result['urls'] = self.getURLs()
+        result['step_number'] = self.step_number
         # TODO(maruel): Move that to a sub-url or just publish the log_url
         # instead.
         #result['logs'] = self.getLogs()
@@ -1319,7 +1333,7 @@ class BuildStatus(styles.Versioned):
         list. Create a BuildStepStatus object to which it can send status
         updates."""
 
-        s = BuildStepStatus(self)
+        s = BuildStepStatus(self, len(self.steps))
         s.setName(name)
         self.steps.append(s)
         return s

@@ -1,3 +1,11 @@
+@menu
+* Builder Configuration::
+* Prioritizing Builds::
+@end menu
+
+@node Builder Configuration
+@subsection Builder Configuration
+
 @bcindex c['builders']
 
 The @code{c['builders']} key is a list of objects giving configuration for the
@@ -93,9 +101,9 @@ builder. The environment variables will override anything in the buildslave's
 environment. Variables passed directly to a @code{ShellCommand} will override
 variables of the same name passed to the Builder.
 
-For example, if you a pool of identical slaves it is often easier to manage
-variables like PATH from Buildbot rather than manually editing it inside of
-the slaves' environment.
+For example, if you have a pool of identical slaves, it is often easier to
+manage variables like PATH from Buildbot, rather than manually editing it inside
+of the slaves' environment.
 
 @example
 f = factory.BuildFactory
@@ -126,11 +134,30 @@ only if the Builder's @code{mergeRequests} key is True, so merging
 only takes place if both allow it. @pxref{Merging BuildRequests}.
 
 @item properties
-A builder may be given a dictionnary of @pxref{Build Properties}
+A builder may be given a dictionary of @pxref{Build Properties}
 specific for this builder in this parameter. Those values can be used
 later on like other properties. @pxref{WithProperties}.
 
 @end table
 
+@node Prioritizing Builds
+@subsection Prioritizing Builds
 
+The @code{BuilderConfig} parameter @code{nextBuild} can be use to prioritize
+build requests within a builder. Note that this is orthogonal to
+@pxref{Prioritizing Builders}, which controls the order in which builders are
+called on to start their builds.
 
+@example
+def nextBuild(bldr, requests):
+    for r in requests:
+        if r.source.branch == 'release':
+            return r
+    return requests[0]
+    
+c['builders'] = [
+  BuilderConfig(name='test', factory=f,
+        nextBuild=nextBuild,
+        slavenames=['slave1', 'slave2', 'slave3', 'slave4']),
+]
+@end example

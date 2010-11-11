@@ -468,6 +468,10 @@ stop all running builds
 
 cancel a build that has not yet started
 
+@item stopChange
+
+cancel builds that include a given change number
+
 @item cleanShutdown
 
 shut down the master gracefully, without interrupting builds
@@ -565,18 +569,21 @@ in change comments.
 
 @subheading revlink
 
-The @code{revlink} is similarly used to create links from revision
-ids to a web-view of your source control system. This will either be
-a string, a dict from string (repository ids) to strings, or a callable.
+The @code{revlink} is used to create links from revision IDs in the web status
+to a web-view of your source control system. The parametr's value must be a
+format string, a dict mapping a string (repository name) to format strings, or a callable.
 
-The string should use '%s' to insert
-the revision id in the url. I.e. for Buildbot on github: 
-@code{revlink='http://github.com/djmitche/buildbot/tree/%s'}
-(The revision id will be URL encoded before inserted in the replacement string)
+The format string should use '%s' to insert the revision id in the url.  For
+example, for Buildbot on github:
+@code{revlink='http://github.com/buildbot/buildbot/tree/%s'} (The revision ID
+will be URL encoded before inserted in the replacement string)
 
 The callable takes the revision id and repository argument, and should return
 an URL to the revision. 
 
+Note that SourceStamps that are not created from version-control changes (e.g.,
+those created by a Nightly or Periodic scheduler) will have an empty repository
+string, as the respository is not known.
 
 @subheading changecommentlink
 
@@ -1079,10 +1086,6 @@ If the given Builder is currently running, wait until the Build is
 finished and then announce the results.
 @item last BUILDER
 Return the results of the last build to run on the given Builder.
-@item join CHANNEL
-Join the given IRC channel
-@item leave CHANNEL
-Leave the given IRC channel
 @item notify on|off|list EVENT
 Report events relating to builds.  If the command is issued as a
 private message, then the report will be sent back as a private

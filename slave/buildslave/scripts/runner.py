@@ -182,8 +182,8 @@ def stop(config, signame="TERM", wait=False, returnFalseOnNotRunning=False):
     except:
         if returnFalseOnNotRunning:
             return False
-        print "buildslave not running."
-        sys.exit(1)
+        if not quiet: print "buildslave not running."
+        sys.exit(0)
     pid = int(f.read().strip())
     signum = getattr(signal, "SIG"+signame)
     timer = 0
@@ -317,10 +317,10 @@ class SlaveOptions(MakerBase):
          "controls permissions of generated files. Use --umask=022 to be world-readable"],
         ["maxdelay", None, 300,
          "Maximum time between connection attempts"],
-        ["log-size", "s", "1000000",
+        ["log-size", "s", "10000000",
          "size at which to rotate twisted log files"],
-        ["log-count", "l", "None",
-         "limit the number of kept old twisted log files"],
+        ["log-count", "l", "10",
+         "limit the number of kept old twisted log files (None for unlimited)"],
         ]
     
     longdesc = """

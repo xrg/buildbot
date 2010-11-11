@@ -175,21 +175,23 @@ class Source(LoggingBuildStep):
             isinstance(repository, str) or isinstance(repository, unicode)
 
         s = self.build.getSourceStamp()
+        props = self.build.getProperties()
+
         if not repository:
             assert s.repository
             return str(s.repository)
         else:
             if callable(repository):
-                return str(repository(s.repository))
+                return str(props.render(repository(s.repository)))
             elif isinstance(repository, dict):
-                return str(repository.get(s.repository))
+                return str(props.render(repository.get(s.repository)))
             else: # string or unicode
                 try:
                     repourl = str(repository % s.repository)
                 except TypeError:
                     # that's the backward compatibility case
-                    repourl = repository
-                return str(repourl)
+                    repourl = props.render(repository)
+                return repourl
 
     def start(self):
         if self.notReally:
@@ -586,7 +588,7 @@ class SVN(Source):
             # the last build used, so if we're using a non-default branch and
             # either 'update' or 'copy' modes, it is safer to refuse to
             # build, and tell the user they need to upgrade the buildslave.
-            if (branch != self.branch
+            if (self.args['branch'] != self.branch
                 and self.args['mode'] in ("update", "copy")):
                 m = ("This buildslave (%s) does not know about multiple "
                      "branches, and using mode=%s would probably build the "
@@ -595,32 +597,6 @@ class SVN(Source):
                      "buildbot-0.7.0 or newer." % (self.build.slavename,
                                                    self.args['mode']))
                 raise BuildSlaveTooOldError(m)
-
-        if slavever == "old":
-            # 0.5.0 compatibility
-            if self.args['mode'] in ("clobber", "copy"):
-                # TODO: use some shell commands to make up for the
-                # deficiency, by blowing away the old directory first (thus
-                # forcing a full checkout)
-                warnings.append("WARNING: this slave can only do SVN updates"
-                                ", not mode=%s\n" % self.args['mode'])
-                log.msg("WARNING: this slave only does mode=update")
-            if self.args['mode'] == "export":
-                raise BuildSlaveTooOldError("old slave does not have "
-                                            "mode=export")
-            self.args['directory'] = self.workdir
-            if revision is not None:
-                # 0.5.0 can only do HEAD. We have no way of knowing whether
-                # the requested revision is HEAD or not, and for
-                # slowly-changing trees this will probably do the right
-                # thing, so let it pass with a warning
-                m = ("WARNING: old slave can only update to HEAD, not "
-                     "revision=%s" % revision)
-                log.msg(m)
-                warnings.append(m + "\n")
-            revision = "HEAD" # interprets this key differently
-            if patch:
-                raise BuildSlaveTooOldError("old slave can't do patch")
 
         if (self.depth is not None) and self.slaveVersionIsOlderThan("svn","2.9"):
             m = ("This buildslave (%s) does not support svn depth "
@@ -849,7 +825,7 @@ class Git(Source):
         if branch is not None:
             self.args['branch'] = branch
 
-        self.args['repourl'] = self.computeRepositoryURL(self.repourl)                  
+        self.args['repourl'] = self.computeRepositoryURL(self.repourl)
         self.args['revision'] = revision
         self.args['patch'] = patch
         slavever = self.slaveVersion("git")

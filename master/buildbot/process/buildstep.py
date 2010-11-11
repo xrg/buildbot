@@ -571,7 +571,7 @@ class BuildStep:
     # immediately, the others will be taken into consideration when
     # determining the overall build status.
     #
-    # steps that are makred as alwaysRun will be run regardless of the outcome
+    # steps that are marked as alwaysRun will be run regardless of the outcome
     # of previous steps (especially steps with haltOnFailure=True)
     haltOnFailure = False
     flunkOnWarnings = False
@@ -770,6 +770,7 @@ class BuildStep:
 
             if skip == SKIPPED:
                 self.step_status.setText(self.describe(True) + ['skipped'])
+                self.step_status.setSkipped(True)
                 # this return value from self.start is a shortcut
                 # to finishing the step immediately
                 reactor.callLater(0, self.finished, SKIPPED)
@@ -1071,6 +1072,13 @@ class LoggingBuildStep(BuildStep):
 
     def setupLogfiles(self, cmd, logfiles):
         """Set up any additional logfiles= logs.
+
+        @param cmd: the LoggedRemoteCommand to add additional logs to.
+
+        @param logfiles: a dict of tuples (logname,remotefilename)
+                         specifying additional logs to watch. (note:
+                         the remotefilename component is currently
+                         ignored)
         """
         for logname,remotefilename in logfiles.items():
             if self.lazylogfiles:

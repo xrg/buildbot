@@ -68,7 +68,7 @@ when True, a FAILURE of this build step will mark the overall build as
 a FAILURE. The remaining steps will still be executed.
 
 @item warnOnWarnings
-when True, a WARNINGS or FAILURE of this build step will mark the
+when True, a WARNINGS of this build step will mark the
 overall build as having WARNINGS. The remaining steps will still be
 executed.
 
@@ -191,6 +191,12 @@ syntaxes, too.
 If @code{propname} exists, substitute its value; otherwise,
 substitute @code{replacement}.  @code{replacement} may be empty
 (@code{%(propname:-)s})
+
+@item propname:~replacement
+Like @code{propname:-replacement}, but only substitutes the value
+of property @code{propname} if it is something Python regards as "true".
+Python considers @code{None}, 0, empty lists, and the empty string to be 
+false, so such values will be replaced by @code{replacement}.
 
 @item propname:+replacement
 If @code{propname} exists, substitute @code{replacement}; otherwise,
@@ -401,6 +407,8 @@ the Change and its return value will be used as repository URL.
 
 @end table
 @end table
+
+Use of WithProperites with string, dict and callable is supported.
 
 Note that this is quite similar to the mechanism used by the WebStatus
 for the @code{changecommentlink}, @code{projects} or @code{repositories} parameter.
