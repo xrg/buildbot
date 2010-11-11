@@ -9,7 +9,7 @@ from twisted.internet import reactor, defer, error
 
 from buildbot import interfaces, locks
 from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE, EXCEPTION, \
-  RETRY, worst_status
+  RETRY, SKIPPED, worst_status
 from buildbot.status.builder import Results
 from buildbot.status.progress import BuildProgress
 
@@ -410,7 +410,10 @@ class Build:
         elif result in (EXCEPTION, RETRY):
             terminate = True
 
-        self.result = worst_status(self.result, possible_overall_result)
+        # if we skipped this step, then don't adjust the build status
+        if result != SKIPPED:
+            self.result = worst_status(self.result, possible_overall_result)
+
         return terminate
 
     def lostRemote(self, remote=None):
@@ -441,8 +444,7 @@ class Build:
         if self.currentStep:
             self.currentStep.interrupt(reason)
 
-        self.result = FAILURE
-        self.text.append("Interrupted")
+        self.result = EXCEPTION
 
         if self._acquiringLock:
             lock, access, d = self._acquiringLock
@@ -464,7 +466,7 @@ class Build:
     def buildException(self, why):
         log.msg("%s.buildException" % self)
         log.err(why)
-        self.buildFinished(["build", "exception"], FAILURE)
+        self.buildFinished(["build", "exception"], EXCEPTION)
 
     def buildFinished(self, text, results):
         """This method must be called when the last Step has completed. It

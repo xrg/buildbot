@@ -25,7 +25,7 @@ SUCCESS, WARNINGS, FAILURE, SKIPPED, EXCEPTION, RETRY = range(6)
 Results = ["success", "warnings", "failure", "skipped", "exception", "retry"]
 
 def worst_status(a, b):
-    # SUCCESS > SKIPPED > WARNINGS > FAILURE > EXCEPTION > RETRY
+    # SUCCESS > WARNINGS > FAILURE > EXCEPTION > RETRY
     # Retry needs to be considered the worst so that conusmers don't have to
     # worry about other failures undermining the RETRY.
     for s in (RETRY, EXCEPTION, FAILURE, WARNINGS, SKIPPED, SUCCESS):
@@ -1001,11 +1001,7 @@ class BuildStepStatus(styles.Versioned):
         log = HTMLLogFile(self, name, logfilename, html)
         self.logs.append(log)
         for w in self.watchers:
-            receiver = w.logStarted(self.build, self, log)
-            # TODO: think about this: there isn't much point in letting
-            # them subscribe
-            #if receiver:
-            #    log.subscribe(receiver, True)
+            w.logStarted(self.build, self, log)
             w.logFinished(self.build, self, log)
 
     def logFinished(self, log):

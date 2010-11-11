@@ -4,6 +4,8 @@ Major User visible changes in Buildslave.             -*- outline -*-
 
 * Buildbot-Slave 0.8.2
 
+* Buildbot-Slave 0.8.2
+
 ** Log Rotation
 
 The default 'create-slave' output now rotates ten twistd.log files, each of

@@ -458,7 +458,7 @@ def upgradeMaster(config):
     m.move_if_present(os.path.join(basedir, "public_html/index.html"),
                       os.path.join(basedir, "templates/root.html"))
 
-    from buildbot.db import connector, dbspec
+    from buildbot.db import dbspec
     spec = dbspec.DBSpec.from_url(config["db"], basedir)
     # TODO: check that TAC file specifies the right spec
 
@@ -634,7 +634,7 @@ def restart(config):
     basedir = config['basedir']
     quiet = config['quiet']
 
-    if not isBuildmasterDir(config['basedir']):
+    if not isBuildmasterDir(basedir):
         print "not a buildmaster directory"
         sys.exit(1)
 
@@ -772,8 +772,8 @@ class SendChangeOptions(OptionsWithOptionsFile):
         ("master", "m", None,
          "Location of the buildmaster's PBListener (host:port)"),
         ("username", "u", None, "Username performing the commit"),
-        ("repository", "R", None, "Repository specifier"),
-        ("project", "P", None, "Project specifier"),
+        ("repository", "R", '', "Repository specifier"),
+        ("project", "P", '', "Project specifier"),
         ("branch", "b", None, "Branch specifier"),
         ("category", "C", None, "Category of repository"),
         ("revision", "r", None, "Revision specifier"),
@@ -784,7 +784,7 @@ class SendChangeOptions(OptionsWithOptionsFile):
         ("logfile", "F", None,
          "Read the log messages from this file (- for stdin)"),
         ("when", "w", None, "timestamp to use as the change time"),
-        ("revlink", "l", None, "Revision link (revlink)"),
+        ("revlink", "l", '', "Revision link (revlink)"),
         ]
 
     buildbotOptions = [
@@ -987,6 +987,7 @@ class TryServerOptions(OptionsWithOptionsFile):
 def doTryServer(config):
     try:
         from hashlib import md5
+        assert md5
     except ImportError:
         # For Python 2.4 compatibility
         import md5

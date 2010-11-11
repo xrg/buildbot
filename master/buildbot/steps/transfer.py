@@ -3,6 +3,7 @@
 import os.path, tarfile, tempfile
 try:
     from cStringIO import StringIO
+    assert StringIO
 except ImportError:
     from StringIO import StringIO
 from twisted.internet import reactor
@@ -27,10 +28,9 @@ class _FileWriter(pb.Referenceable):
             os.makedirs(dirname)
 
         self.destfile = destfile
+        self.mode = mode
         fd, self.tmpname = tempfile.mkstemp(dir=dirname)
         self.fp = os.fdopen(fd, 'wb')
-        if mode is not None:
-            os.chmod(destfile, mode)
         self.remaining = maxsize
 
     def remote_write(self, data):
@@ -57,6 +57,8 @@ class _FileWriter(pb.Referenceable):
         self.fp = None
         os.rename(self.tmpname, self.destfile)
         self.tmpname = None
+        if self.mode is not None:
+            os.chmod(self.destfile, self.mode)
 
     def __del__(self):
         # unclean shutdown, the file is probably truncated, so delete it
