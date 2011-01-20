@@ -1,4 +1,18 @@
-# -*- test-case-name: buildbot.test.test_steps -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 import re
 
@@ -771,9 +785,11 @@ class BuildStep:
             if skip == SKIPPED:
                 self.step_status.setText(self.describe(True) + ['skipped'])
                 self.step_status.setSkipped(True)
-                # this return value from self.start is a shortcut
-                # to finishing the step immediately
-                reactor.callLater(0, self.finished, SKIPPED)
+                # this return value from self.start is a shortcut to finishing
+                # the step immediately; we skip calling finished() as
+                # subclasses may have overridden that an expect it to be called
+                # after start() (bug #837)
+                reactor.callLater(0, self._finishFinished, SKIPPED)
         except:
             log.msg("BuildStep.startStep exception in .start")
             self.failed(Failure())
@@ -862,14 +878,22 @@ class BuildStep:
                 assert self.stopped
 
     def finished(self, results):
-        if self.stopped:
+        if self.stopped and results != RETRY:
             # We handle this specially because we don't care about
             # the return code of an interrupted command; we know
             # that this should just be exception due to interrupt
+            # At the same time we must respect RETRY status because it's used
+            # to retry interrupted build due to some other issues for example
+            # due to slave lost
             results = EXCEPTION
             self.step_status.setText(self.describe(True) +
                                  ["interrupted"])
             self.step_status.setText2(["interrupted"])
+        self._finishFinished(results)
+
+    def _finishFinished(self, results):
+        # internal function to indicate that this step is done; this is separated
+        # from finished() so that subclasses can override finished()
         if self.progress:
             self.progress.finish()
         self.step_status.stepFinished(results)

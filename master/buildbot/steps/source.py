@@ -1,4 +1,18 @@
-# -*- test-case-name: buildbot.test.test_vc -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 from warnings import warn
 from email.Utils import formatdate
@@ -828,12 +842,134 @@ class Git(Source):
         self.args['repourl'] = self.computeRepositoryURL(self.repourl)
         self.args['revision'] = revision
         self.args['patch'] = patch
+
+        # check if there is any patchset we should fetch from Gerrit
+        try:
+            # GerritChangeSource
+            self.args['gerrit_branch'] = self.build.getProperty("event.patchSet.ref")
+            self.setProperty("gerrit_branch", self.args['gerrit_branch'])
+        except KeyError:
+            try:
+                # forced build
+                change = self.build.getProperty("gerrit_change").split('/')
+                if len(change) == 2:
+                    self.args['gerrit_branch'] = "refs/changes/%2.2d/%d/%d" \
+                                                 % (int(change[0]) % 100, int(change[0]), int(change[1]))
+                    self.setProperty("gerrit_branch", self.args['gerrit_branch'])
+            except:
+                pass
+
         slavever = self.slaveVersion("git")
         if not slavever:
             raise BuildSlaveTooOldError("slave is too old, does not know "
                                         "about git")
         cmd = LoggedRemoteCommand("git", self.args)
         self.startCommand(cmd)
+
+
+class Repo(Source):
+    """Check out a source tree from a repo repository described by manifest."""
+
+    name = "repo"
+
+    def __init__(self,
+                 manifest_url=None,
+                 manifest_branch="master",
+                 manifest_file="default.xml",
+                 tarball=None,
+                 **kwargs):
+        """
+        @type  manifest_url: string
+        @param manifest_url: The URL which points at the repo manifests repository.
+
+        @type  manifest_branch: string
+        @param manifest_branch: The manifest branch to check out by default.
+
+        @type  manifest_file: string
+        @param manifest_file: The manifest to use for sync.
+
+        """
+        Source.__init__(self, **kwargs)
+        self.manifest_url = manifest_url
+        self.addFactoryArguments(manifest_url=manifest_url,
+                                 manifest_branch=manifest_branch,
+                                 manifest_file=manifest_file,
+                                 tarball=tarball,
+                                 )
+        self.args.update({'manifest_branch': manifest_branch,
+                          'manifest_file': manifest_file,
+                          'tarball': tarball,
+                          })
+
+    def computeSourceRevision(self, changes):
+        if not changes:
+            return None
+        return changes[-1].revision
+
+    def parseDownloadProperty(self, s):
+        """
+         lets try to be nice in the format we want
+         can support several instances of "repo download proj number/patch" (direct copy paste from gerrit web site)
+         or several instances of "proj number/patch" (simpler version)
+         This feature allows integrator to build with several pending interdependant changes.
+         returns list of repo downloads sent to the buildslave
+         """
+        import re
+        if s == None:
+            return []
+        re1 = re.compile("repo download ([^ ]+) ([0-9]+/[0-9]+)")
+        re2 = re.compile("([^ ]+) ([0-9]+/[0-9]+)")
+        re3 = re.compile("([^ ]+)/([0-9]+/[0-9]+)")
+        ret = []
+        for cur_re in [re1, re2, re3]:
+            res = cur_re.search(s)
+            while res:
+                ret.append("%s %s" % (res.group(1), res.group(2)))
+                s = s[:res.start(0)] + s[res.end(0):]
+                res = cur_re.search(s)
+        return ret
+
+    def startVC(self, branch, revision, patch):
+        self.args['manifest_url'] = self.computeRepositoryURL(self.manifest_url)
+
+        # only master has access to properties, so we must implement this here.
+        downloads = []
+
+        # download patches based on GerritChangeSource events
+        for change in self.build.allChanges():
+            if (change.properties.has_key("event.type") and
+                change.properties["event.type"] == "patchset-created"):
+                downloads.append("%s %s/%s"% (change.properties["event.change.project"],
+                                              change.properties["event.change.number"],
+                                              change.properties["event.patchSet.number"]))
+
+        # download patches based on web site forced build properties:
+        # "repo_d", "repo_d0", .., "repo_d9"
+        # "repo_download", "repo_download0", .., "repo_download9"
+        for propName in ["repo_d"] + ["repo_d%d" % i for i in xrange(0,10)] + \
+          ["repo_download"] + ["repo_download%d" % i for i in xrange(0,10)]:
+            try:
+                s = self.build.getProperty(propName)
+                downloads.extend(self.parseDownloadProperty(s))
+            except KeyError:
+                pass
+
+        if downloads:
+            self.args["repo_downloads"] = downloads
+            self.setProperty("repo_downloads", downloads)
+
+        slavever = self.slaveVersion("repo")
+        if not slavever:
+            raise BuildSlaveTooOldError("slave is too old, does not know "
+                                        "about repo")
+        cmd = LoggedRemoteCommand("repo", self.args)
+        self.startCommand(cmd)
+
+    def commandComplete(self, cmd):
+        if cmd.updates.has_key("repo_downloaded"):
+            repo_downloaded = cmd.updates["repo_downloaded"][-1]
+            if repo_downloaded:
+                self.setProperty("repo_downloaded", str(repo_downloaded), "Source")
 
 
 class Bzr(Source):

@@ -13,4 +13,4 @@ pylint:
 	cd slave; $(MAKE) pylint
 
 pyflakes:
-	cd master; $(MAKE) pyflakes
+	pyflakes master/buildbot slave/buildslave

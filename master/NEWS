@@ -2,9 +2,81 @@ Major User visible changes in Buildbot.             -*- outline -*-
    see the git log for a detailed list of changes:
    http://github.com/buildbot/buildbot/commits/master
 
+
+* Next Version
+
+** SQLAlchemy & SQLAlchemy-Migrate
+
+Buildbot now uses SQLAlchemy as a database abstraction layer.  This will give
+us greater inter-database compatibility and a more stable and reliable basis
+for this core component of the framework.  SQLAlchemy-Migrate is used to manage
+changes to the database schema from version to version.
+
+** Less garish color scheme
+
+The default color scheme for Buildbot has been modified to make it slightly
+less, well, neon. Note: This will not affect already-created masters, as
+their default.css file has already been created. If you currently use the
+default and want to get the new version, just overwrite public_html/default.css
+with the copy in this version.
+
+** Deprecations, Removals, and Non-Compatible Changes
+
+*** MasterShellCommand and all of the transfer steps now default to
+haltOnFailure=True and flunkOnFailure=True
+
+* Buildbot 0.8.3 (December 19, 2010)
+
+** Deprecations and Removals
+
+*** Change sources can no longer call change-related methods on self.parent.
+Instead, use self.master methods, e.g., self.master.addChange.
+
 * Next Release
 
-* Buildbot 0.8.2
+** PBChangeSource now supports authentication
+
+PBChangeSource now supports the `user` and `passwd` arguments.  Users with a
+publicly exposed PB port should use these parameters to limit sendchange
+access.
+
+Previous versions of Buildbot should never be configured with a PBChangeSource
+and a publicly accessible slave port, as that arrangement  allows anyone to
+connect and inject a change into the Buildmaster without any authentication at
+all, aside from the hard-coded 'change'/'changepw' credentials.  In many cases,
+this can lead to arbitrary code injection on slaves.
+
+** Experiemental Gerrit and Repo support
+
+A new ChangeSource (GerritChangeSource), status listener (GerritStatusPush),
+and source step (Repo) are available in this version.  These are not fully
+documented and still have a number of known bugs outstanding (see
+http://buildbot.net/trac/wiki/RepoProject), and as such are considered
+experimental in this release.
+
+** WithProperties now supports lambda substitutions
+
+WithProperties now has the option to pass callable functions as keyword
+arguments to substitute in the results of more complex Python code at
+evaluation-time.
+
+** New 'SetPropertiesFromEnv' step
+
+This step uses the slave environment to set build properties.
+
+** Deprecations and Removals
+
+*** The console view previously had an undocumented feature that would strip
+leading digits off the category name.  This was undocumented and apparently
+non-functional, and has been removed. (#1059)
+
+*** contrib/hg_buildbot.py was removed in favor of buildbot.changes.hgbuildbot.
+
+*** The misnamed sendchange option 'username' has been renamed to 'who'; the old
+option continues to work, but is deprecated and will be removed. (#1711)
+
+
+* Buildbot 0.8.2 (October 29, 2010)
 
 ** Upgrading
 
@@ -86,6 +158,7 @@ decision.
 
 *** The Twisted-only steps BuildDebs and ProcessDocs have been removed.
 
+
 * Release 0.8.1 (June 16, 2010)
 
 ** Slave Split into separate component
@@ -140,6 +213,7 @@ Makefile.buildbot existed in the master directory.  This functionality will be
 removed in Buildbot-0.8.2, and the create-master command will no longer create
 a Makefile.sample.  Of course, Buildbot still supports build processes on the
 slave using make!
+
 
 * Release 0.8.0 (May 25, 2010)
 
@@ -230,6 +304,7 @@ did not include the rest of the WebStatus pages.
 *** BuildmasterConfig no longer accepts 'bots' and 'sources' as keys
 (deprecated in 0.7.6). Use 'slaves' and 'change_source' instead.
 
+
 * Release 0.7.12 (January 21, 2010)
 
 ** New 'console' display
@@ -301,10 +376,12 @@ The docstrings for buildbot are now available in a web-friendly format:
 
 ** Many, many bugfixes
 
+
 * Release 0.7.11p (July 16, 2009)
 
 Fixes a few test failures in 0.7.11, and gives a default value for branchType
 if it is not specified by the master.
+
 
 * Release 0.7.11 (July 5, 2009)
 
@@ -365,6 +442,7 @@ info.  Located at /tgrid.
 
 Trigger now supports copy_properties, to send selected properties to the
 triggered build.
+
 
 * Release 0.7.10 (25 Feb 2009)
 
@@ -540,6 +618,7 @@ twistd.log files.
 *** Prioritize build requests based on the time they wre submitted (#334)
 
 Balancing of load is a bit more fair, although not true load balancing.
+
 
 * Release 0.7.9 (15 Sep 2008)
 

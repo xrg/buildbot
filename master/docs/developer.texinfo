@@ -120,6 +120,34 @@ will be automatically removed from the cache.  The class has @code{get} and
 @code{add} methods, and can also be accessed via dictionary syntax
 (@code{lru['id']}).
 
+@item deferredLocked
+
+This is a decorator to wrap an event-driven method (one returning a
+@code{Deferred}) in an acquire/release pair of a designated
+@code{DeferredLock}.  For simple functions with a static lock, this is as easy as
+
+@example
+someLock = defer.DeferredLock()
+@@util.deferredLocked(someLock)
+def someLockedFunction(..):
+    # ..
+    return d
+@end example
+
+for class methods which must access a lock that is an instance attribute, the
+lock can be specified by a string, which will be dynamically resolved to the
+specific instance at runtime:
+
+@example
+    def __init__(self):
+        self.someLock = defer.DeferredLock()
+
+    @@util.deferredLocked('someLock')
+    def someLockedFunction(..):
+        # ..
+        return d
+@end example
+
 @end table
 
 @node buildbot.util.collections
@@ -168,22 +196,9 @@ instead of a more complex conditional import of @code{simplejson} or
 @node The Database
 @section The Database
 
-@dvindex buildbot.db.dbspec.DBSpec
 @dvindex buildbot.db.connector.DBConnector
 
-Buildbot stores its state in a database, using the Python DBAPI to access it.
-
-A database is specified with the @code{buildbot.db.dbspec.DBSpec} class, which
-encapsulates all of the parameters necessary to create a DBAPI connection.  The
-DBSpec class can create either a single synchronous connection, or a twisted
-adbapi connection pool.
-
-Most uses of the database in Buildbot are done through the
-@code{buildbot.db.connector.DBConnector} class, which wraps the DBAPI to
-provide purpose-specific functions.
-
-The database schema is managed by a special class, described in the next
-section.
+TODO
 
 @menu
 * Database Schema::
@@ -459,7 +474,16 @@ This method returns a dictionary of @code{SlaveBuilder} objects - see below
 Adds a message to the slave logfile
 
 @item remote_getSlaveInfo
-Returns the contents of the slave's @file{info/} directory
+Returns the contents of the slave's @file{info/} directory. Also contains the keys
+
+@table @code
+@item environ
+copy of the slaves environment
+@item system
+OS the slave is running (extracted from pythons os.name)
+@item basedir
+base directory where slave is running
+@end table
 
 @item remote_getVersion
 Returns the slave's version

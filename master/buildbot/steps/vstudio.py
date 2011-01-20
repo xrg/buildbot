@@ -1,3 +1,18 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 # Visual studio steps
 
 from buildbot.steps.shell import ShellCommand
@@ -24,7 +39,7 @@ class MSLogLineObserver(LogLineObserver):
     _re_delimitor = re.compile(r'^(\d+>)?-{5}.+-{5}$')
     _re_file = re.compile(r'^(\d+>)?[^ ]+\.(cpp|c)$')
     _re_warning = re.compile(r' : warning [A-Z]+[0-9]+:')
-    _re_error = re.compile(r' error [A-Z]+[0-9]+\s?: ')
+    _re_error = re.compile(r' ?error [A-Z]+[0-9]+\s?: ')
 
     nbFiles = 0
     nbProjects = 0
@@ -167,6 +182,8 @@ class VisualStudio(ShellCommand):
         self.step_status.setStatistic('errors', self.logobserver.nbErrors)
 
     def evaluateCommand(self, cmd):
+        if cmd.rc != 0:
+            return FAILURE
         if self.logobserver.nbErrors > 0:
             return FAILURE
         if self.logobserver.nbWarnings > 0:
@@ -223,6 +240,7 @@ class VC6(VisualStudio):
         return VisualStudio.start(self)    
 
 class VC7(VisualStudio):
+    default_installdir = 'C:\\Program Files\\Microsoft Visual Studio .NET 2003'
 
     def __init__(self, **kwargs):  
 
@@ -252,7 +270,7 @@ class VC7(VisualStudio):
         addEnvPath(cmd.args['env'], "LIB", VCInstallDir + '\\SDK\\v1.1\\lib')
         
     def start(self):
-        command = ["devenv"]
+        command = ["devenv.com"]
         command.append(self.projectfile)
         if self.mode == "rebuild":
             command.append("/Rebuild")
@@ -267,7 +285,7 @@ class VC7(VisualStudio):
 #alias VC7 as VS2003
 VS2003 = VC7
 
-class VC8(VisualStudio):
+class VC8(VC7):
     
     # Our ones
     arch = "x86"
@@ -309,20 +327,6 @@ class VC8(VisualStudio):
         addEnvPath(cmd.args['env'], "LIB", VCInstallDir + '\\PlatformSDK\\lib' + archsuffix)
         addEnvPath(cmd.args['env'], "LIB", VSInstallDir + '\\SDK\\v2.0\\lib' + archsuffix)
 
-    # the start method is the same as for VC7
-    def start(self):
-        command = ["devenv"]
-        command.append(self.projectfile)
-        if self.mode == "rebuild":
-            command.append("/Rebuild")
-        else:
-            command.append("/Build")
-        command.append(self.config)
-        if self.useenv:
-            command.append("/UseEnv")
-        self.setCommand(command)
-        return VisualStudio.start(self)
-
 #alias VC8 as VS2005
 VS2005 = VC8
 
@@ -345,3 +349,9 @@ class VC9(VC8):
     default_installdir = 'C:\\Program Files\\Microsoft Visual Studio 9.0'
 
 VS2008 = VC9
+
+# VC10 doesn't looks like it needs extra stuff.
+class VC10(VC9):
+    default_installdir = 'C:\\Program Files\\Microsoft Visual Studio 10.0'
+
+VS2010 = VC10

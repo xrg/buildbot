@@ -1,70 +1,32 @@
-# ***** BEGIN LICENSE BLOCK *****
-# Version: MPL 1.1/GPL 2.0/LGPL 2.1
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
 #
-# The contents of this file are subject to the Mozilla Public License Version
-# 1.1 (the "License"); you may not use this file except in compliance with
-# the License. You may obtain a copy of the License at
-# http://www.mozilla.org/MPL/
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
 #
-# Software distributed under the License is distributed on an "AS IS" basis,
-# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
-# for the specific language governing rights and limitations under the
-# License.
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-# The Original Code is Mozilla-specific Buildbot steps.
-#
-# The Initial Developer of the Original Code is
-# Mozilla Foundation.
-# Portions created by the Initial Developer are Copyright (C) 2009
-# the Initial Developer. All Rights Reserved.
-#
-# Contributor(s):
-#   Brian Warner <warner@lothar.com>
-#   Chris AtLee <catlee@mozilla.com>
-#   Dustin Mitchell <dustin@zmanda.com>
-#
-# Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or
-# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
-# in which case the provisions of the GPL or the LGPL are applicable instead
-# of those above. If you wish to allow use of your version of this file only
-# under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the MPL, indicate your
-# decision by deleting the provisions above and replace them with the notice
-# and other provisions required by the GPL or the LGPL. If you do not delete
-# the provisions above, a recipient may use your version of this file under
-# the terms of any one of the MPL, the GPL or the LGPL.
-#
-# ***** END LICENSE BLOCK *****
+# Copyright Buildbot Team Members
 
-import sys, collections, base64
+import collections, base64
 
 from twisted.python import log, threadable
-from twisted.internet import defer
-from twisted.enterprise import adbapi
+from buildbot.db import enginestrategy
+
 from buildbot import util
 from buildbot.util import collections as bbcollections
-from buildbot.changes.changes import Change
 from buildbot.sourcestamp import SourceStamp
 from buildbot.buildrequest import BuildRequest
 from buildbot.process.properties import Properties
 from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE
 from buildbot.util.eventual import eventually
 from buildbot.util import json
-
-# Don't auto-resubmit queries that encounter a broken connection: let them
-# fail. Use the "notification doorbell" thing to provide the retry. Set
-# cp_reconnect=True, so that a connection failure will prepare the
-# ConnectionPool to reconnect next time.
-
-class MyTransaction(adbapi.Transaction):
-    def execute(self, *args, **kwargs):
-        #print "Q", args, kwargs
-        return self._cursor.execute(*args, **kwargs)
-    def fetchall(self):
-        rc = self._cursor.fetchall()
-        #print " F", rc
-        return rc
+from buildbot.db import pool, model, changes
 
 def _one_or_else(res, default=None, process_f=lambda x: x):
     if not res:
@@ -79,35 +41,45 @@ def str_or_none(s):
 class Token: # used for _start_operation/_end_operation
     pass
 
-class DBConnector(util.ComparableMixin):
-    # this will refuse to create the database: use 'create-master' for that
-    compare_attrs = ["args", "kwargs"]
+from twisted.enterprise import adbapi
+class TempAdbapiPool(adbapi.ConnectionPool):
+    def __init__(self, engine):
+        # this wants a module name, so give it one..
+        adbapi.ConnectionPool.__init__(self, "buildbot.db.connector")
+        self._engine = engine
+
+    def connect(self):
+        return self._engine.raw_connection()
+
+    def stop(self):
+        pass
+
+class DBConnector(object):
+    """
+    The connection between Buildbot and its backend database.  This is
+    generally accessible as master.db, but is also used during upgrades.
+
+    Most of the interesting operations available via the connector are
+    implemented in connector components, available as attributes of this
+    object, and listed below.
+    """
+
     synchronized = ["notify", "_end_operation"]
     MAX_QUERY_TIMES = 1000
 
-    def __init__(self, spec):
-        # typical args = (dbmodule, dbname, username, password)
+    def __init__(self, db_url, basedir):
+        self.basedir = basedir
+        "basedir for this master - used for upgrades"
+
+        self._engine = enginestrategy.create_engine(db_url, basedir=self.basedir)
+        self.pool = pool.DBThreadPool(self._engine)
+        "thread pool (L{buildbot.db.pool.DBThreadPool}) for this db"
+
+        self._oldpool = TempAdbapiPool(self._engine)
+
         self._query_times = collections.deque()
-        self._spec = spec
 
-        # this is for synchronous calls: runQueryNow, runInteractionNow
-        self._dbapi = spec.get_dbapi()
-        self._nonpool = None
-        self._nonpool_lastused = None
-        self._nonpool_max_idle = spec.get_maxidle()
-
-        # pass queries in with "?" placeholders. If the backend uses a
-        # different style, we'll replace them.
-        self.paramstyle = self._dbapi.paramstyle
-
-        self._pool = spec.get_async_connection_pool()
-        self._pool.transactionFactory = MyTransaction
-        # the pool must be started before it can be used. The real
-        # buildmaster process will do this at reactor start. CLI tools (like
-        # "buildbot upgrade-master") must do it manually. Unit tests are run
-        # in an environment in which it is already started.
-
-        self._change_cache = util.LRUCache()
+        self._change_cache = util.LRUCache() # TODO: remove
         self._sourcestamp_cache = util.LRUCache()
         self._active_operations = set() # protected by synchronized=
         self._pending_notifications = []
@@ -117,32 +89,35 @@ class DBConnector(util.ComparableMixin):
 
         self._started = False
 
-    def _getCurrentTime(self):
+        # set up components
+        self.model = model.Model(self)
+        "L{buildbot.db.model.Model} instance"
+
+        self.changes = changes.ChangesConnectorComponent(self)
+        "L{buildbot.db.changes.ChangesConnectorComponent} instance"
+
+
+
+    def _getCurrentTime(self): # TODO: remove
         # this is a seam for use in testing
         return util.now()
 
-    def start(self):
+    def start(self): # TODO: remove
         # this only *needs* to be called in reactorless environments (which
         # should be eliminated anyway).  but it doesn't hurt anyway
-        self._pool.start()
+        self._oldpool.start()
         self._started = True
 
-    def stop(self):
+    def stop(self): # TODO: remove
         """Call this when you're done with me"""
-
-        # Close our synchronous connection if we've got one
-        if self._nonpool:
-            self._nonpool.close()
-            self._nonpool = None
-            self._nonpool_lastused = None
 
         if not self._started:
             return
-        self._pool.close()
+        self._oldpool.stop()
         self._started = False
-        del self._pool
+        del self._oldpool
 
-    def quoteq(self, query):
+    def quoteq(self, query): # TODO: remove
         """
         Given a query that contains qmark-style placeholders, like::
          INSERT INTO foo (col1, col2) VALUES (?,?)
@@ -150,12 +125,13 @@ class DBConnector(util.ComparableMixin):
         placeholders, like::
          INSERT INTO foo (col1, col2) VALUES (%s,%s)
         """
-        if self.paramstyle == "format":
-            return query.replace("?","%s")
-        assert self.paramstyle == "qmark"
+        # TODO: assumes sqlite
+#        if self.paramstyle == "format":
+#            return query.replace("?","%s")
+        #assert self.paramstyle == "qmark"
         return query
 
-    def parmlist(self, count):
+    def parmlist(self, count): # TODO: remove
         """
         When passing long lists of values to e.g., an INSERT query, it is
         tedious to pass long strings of ? placeholders.  This function will
@@ -165,18 +141,7 @@ class DBConnector(util.ComparableMixin):
         p = self.quoteq("?")
         return "(" + ",".join([p]*count) + ")"
 
-    def get_version(self):
-        """Returns None for an empty database, or a number (probably 1) for
-        the database's version"""
-        try:
-            res = self.runQueryNow("SELECT version FROM version")
-        except (self._dbapi.OperationalError, self._dbapi.ProgrammingError):
-            # this means the version table is missing: the db is empty
-            return None
-        assert len(res) == 1
-        return res[0][0]
-
-    def runQueryNow(self, *args, **kwargs):
+    def runQueryNow(self, *args, **kwargs): # TODO: remove
         # synchronous+blocking version of runQuery()
         assert self._started
         return self.runInteractionNow(self._runQuery, *args, **kwargs)
@@ -185,6 +150,7 @@ class DBConnector(util.ComparableMixin):
         c.execute(*args, **kwargs)
         return c.fetchall()
 
+    # TODO: remove
     def _start_operation(self):
         t = Token()
         self._active_operations.add(t)
@@ -203,7 +169,7 @@ class DBConnector(util.ComparableMixin):
             eventually(self.send_notification, category, args)
         self._pending_notifications = []
 
-    def runInteractionNow(self, interaction, *args, **kwargs):
+    def runInteractionNow(self, interaction, *args, **kwargs): # TODO: remove
         # synchronous+blocking version of runInteraction()
         assert self._started
         start = self._getCurrentTime()
@@ -214,270 +180,68 @@ class DBConnector(util.ComparableMixin):
             self._end_operation(t)
             self._add_query_time(start)
 
-    def get_sync_connection(self):
-        # This is a wrapper around spec.get_sync_connection that maintains a
-        # single connection to the database for synchronous usage.  It will get
-        # a new connection if the existing one has been idle for more than
-        # max_idle seconds.
-        if self._nonpool_max_idle is not None:
-            now = util.now()
-            if self._nonpool_lastused and self._nonpool_lastused + self._nonpool_max_idle < now:
-                self._nonpool = None
+    def get_sync_connection(self): # TODO: remove
+        # TODO: SYNC CONNECTIONS MUST DIE
+        return self._engine.raw_connection()
 
-        if not self._nonpool:
-            self._nonpool = self._spec.get_sync_connection()
-
-        self._nonpool_lastused = util.now()
-        return self._nonpool
-
-    def _runInteractionNow(self, interaction, *args, **kwargs):
+    def _runInteractionNow(self, interaction, *args, **kwargs): # TODO: remove
         conn = self.get_sync_connection()
         c = conn.cursor()
-        try:
-            result = interaction(c, *args, **kwargs)
-            c.close()
-            conn.commit()
-            return result
-        except:
-            excType, excValue, excTraceback = sys.exc_info()
-            try:
-                conn.rollback()
-                c2 = conn.cursor()
-                c2.execute(self._pool.good_sql)
-                c2.close()
-                conn.commit()
-            except:
-                log.msg("rollback failed, will reconnect next query")
-                log.err()
-                # and the connection is probably dead: clear the reference,
-                # so we'll establish a new connection next time
-                self._nonpool = None
-            raise excType, excValue, excTraceback
+        result = interaction(c, *args, **kwargs)
+        c.close()
+        conn.commit()
+        return result
 
-    def notify(self, category, *args):
+    def notify(self, category, *args): # TODO: remove
         # this is wrapped by synchronized= and threadable.synchronous(),
         # since it will be invoked from runInteraction threads
         self._pending_notifications.append( (category,args) )
 
-    def send_notification(self, category, args):
+    def send_notification(self, category, args): # TODO: remove
         # in the distributed system, this will be invoked by lineReceived()
         #print "SEND", category, args
         for observer in self._subscribers[category]:
             eventually(observer, category, *args)
 
-    def subscribe_to(self, category, observer):
+    def subscribe_to(self, category, observer): # TODO: remove
         self._subscribers[category].add(observer)
 
-    def runQuery(self, *args, **kwargs):
+    def runQuery(self, *args, **kwargs): # TODO: remove
         assert self._started
         self._pending_operation_count += 1
-        d = self._pool.runQuery(*args, **kwargs)
+        d = self._oldpool.runQuery(*args, **kwargs)
         return d
 
-    def _runQuery_done(self, res, start, t):
+    def _runQuery_done(self, res, start, t): # TODO: remove
         self._end_operation(t)
         self._add_query_time(start)
         self._pending_operation_count -= 1
         return res
 
-    def _add_query_time(self, start):
+    def _add_query_time(self, start): # TODO: remove
         elapsed = self._getCurrentTime() - start
         self._query_times.append(elapsed)
         if len(self._query_times) > self.MAX_QUERY_TIMES:
             self._query_times.popleft()
 
-    def runInteraction(self, *args, **kwargs):
+    def runInteraction(self, *args, **kwargs): # TODO: remove
         assert self._started
         self._pending_operation_count += 1
         start = self._getCurrentTime()
         t = self._start_operation()
-        d = self._pool.runInteraction(*args, **kwargs)
+        d = self._oldpool.runInteraction(*args, **kwargs)
         d.addBoth(self._runInteraction_done, start, t)
         return d
-    def _runInteraction_done(self, res, start, t):
+    def _runInteraction_done(self, res, start, t): # TODO: remove
         self._end_operation(t)
         self._add_query_time(start)
         self._pending_operation_count -= 1
         return res
 
-    # ChangeManager methods
-
-    def addChangeToDatabase(self, change):
-        self.runInteractionNow(self._txn_addChangeToDatabase, change)
-        self._change_cache.add(change.number, change)
-
-    def _txn_addChangeToDatabase(self, t, change):
-        q = self.quoteq("INSERT INTO changes"
-                        " (author,"
-                        "  comments, is_dir,"
-                        "  branch, revision, revlink,"
-                        "  when_timestamp, category,"
-                        "  repository, project)"
-                        " VALUES (?, ?,?, ?,?,?, ?,?, ?,?)")
-        # TODO: map None to.. empty string?
-
-        values = (change.who,
-                  change.comments, change.isdir,
-                  change.branch, change.revision, change.revlink,
-                  change.when, change.category, change.repository,
-                  change.project)
-        t.execute(q, values)
-        change.number = t.lastrowid
-
-        for link in change.links:
-            t.execute(self.quoteq("INSERT INTO change_links (changeid, link) "
-                                  "VALUES (?,?)"),
-                      (change.number, link))
-        for filename in change.files:
-            t.execute(self.quoteq("INSERT INTO change_files (changeid,filename)"
-                                  " VALUES (?,?)"),
-                      (change.number, filename))
-        for propname,propvalue in change.properties.properties.items():
-            encoded_value = json.dumps(propvalue)
-            t.execute(self.quoteq("INSERT INTO change_properties"
-                                  " (changeid, property_name, property_value)"
-                                  " VALUES (?,?,?)"),
-                      (change.number, propname, encoded_value))
-        self.notify("add-change", change.number)
-
-    def changeEventGenerator(self, branches=[], categories=[], committers=[], minTime=0):
-        q = "SELECT changeid FROM changes"
-        args = []
-        if branches or categories or committers:
-            q += " WHERE "
-            pieces = []
-            if branches:
-                pieces.append("branch IN %s" % self.parmlist(len(branches)))
-                args.extend(list(branches))
-            if categories:
-                pieces.append("category IN %s" % self.parmlist(len(categories)))
-                args.extend(list(categories))
-            if committers:
-                pieces.append("author IN %s" % self.parmlist(len(committers)))
-                args.extend(list(committers))
-            if minTime:
-                pieces.append("when_timestamp > %d" % minTime)
-            q += " AND ".join(pieces)
-        q += " ORDER BY changeid DESC"
-        rows = self.runQueryNow(q, tuple(args))
-        for (changeid,) in rows:
-            yield self.getChangeNumberedNow(changeid)
-
-    def getLatestChangeNumberNow(self, branch=None, t=None):
-        if t:
-            return self._txn_getLatestChangeNumber(branch=branch, t=t)
-        else:
-            return self.runInteractionNow(self._txn_getLatestChangeNumber)
-    def _txn_getLatestChangeNumber(self, branch, t):
-        args = None
-        if branch:
-            br_clause = "WHERE branch =? "
-            args = ( branch, )
-        q = self.quoteq("SELECT max(changeid) from changes"+ br_clause)
-        t.execute(q, args)
-        row = t.fetchone()
-        if not row:
-            return 0
-        return row[0]
-
-    def getChangeNumberedNow(self, changeid, t=None):
-        # this is a synchronous/blocking version of getChangeByNumber
-        assert changeid >= 0
-        c = self._change_cache.get(changeid)
-        if c:
-            return c
-        if t:
-            c = self._txn_getChangeNumberedNow(t, changeid)
-        else:
-            c = self.runInteractionNow(self._txn_getChangeNumberedNow, changeid)
-        self._change_cache.add(changeid, c)
-        return c
-    def _txn_getChangeNumberedNow(self, t, changeid):
-        q = self.quoteq("SELECT author, comments,"
-                        " is_dir, branch, revision, revlink,"
-                        " when_timestamp, category,"
-                        " repository, project"
-                        " FROM changes WHERE changeid = ?")
-        t.execute(q, (changeid,))
-        rows = t.fetchall()
-        if not rows:
-            return None
-        (who, comments,
-         isdir, branch, revision, revlink,
-         when, category, repository, project) = rows[0]
-        branch = str_or_none(branch)
-        revision = str_or_none(revision)
-        q = self.quoteq("SELECT link FROM change_links WHERE changeid=?")
-        t.execute(q, (changeid,))
-        rows = t.fetchall()
-        links = [row[0] for row in rows]
-        links.sort()
-
-        q = self.quoteq("SELECT filename FROM change_files WHERE changeid=?")
-        t.execute(q, (changeid,))
-        rows = t.fetchall()
-        files = [row[0] for row in rows]
-        files.sort()
-
-        p = self.get_properties_from_db("change_properties", "changeid",
-                                        changeid, t)
-        c = Change(who=who, files=files, comments=comments, isdir=isdir,
-                   links=links, revision=revision, when=when,
-                   branch=branch, category=category, revlink=revlink,
-                   repository=repository, project=project)
-        c.properties.updateFromProperties(p)
-        c.number = changeid
-        return c
-
-    def getChangeByNumber(self, changeid):
-        # return a Deferred that fires with a Change instance, or None if
-        # there is no Change with that number
-        assert changeid >= 0
-        c = self._change_cache.get(changeid)
-        if c:
-            return defer.succeed(c)
-        d1 = self.runQuery(self.quoteq("SELECT author, comments,"
-                                       " is_dir, branch, revision, revlink,"
-                                       " when_timestamp, category,"
-                                       " repository, project"
-                                       " FROM changes WHERE changeid = ?"),
-                           (changeid,))
-        d2 = self.runQuery(self.quoteq("SELECT link FROM change_links"
-                                       " WHERE changeid=?"),
-                           (changeid,))
-        d3 = self.runQuery(self.quoteq("SELECT filename FROM change_files"
-                                       " WHERE changeid=?"),
-                           (changeid,))
-        d4 = self.runInteraction(self._txn_get_properties_from_db,
-                "change_properties", "changeid", changeid)
-        d = defer.gatherResults([d1,d2,d3,d4])
-        d.addCallback(self._getChangeByNumber_query_done, changeid)
-        return d
-
-    def _getChangeByNumber_query_done(self, res, changeid):
-        (rows, link_rows, file_rows, properties) = res
-        if not rows:
-            return None
-        (who, comments,
-         isdir, branch, revision, revlink,
-         when, category, repository, project) = rows[0]
-        branch = str_or_none(branch)
-        revision = str_or_none(revision)
-        links = [row[0] for row in link_rows]
-        links.sort()
-        files = [row[0] for row in file_rows]
-        files.sort()
-
-        c = Change(who=who, files=files, comments=comments, isdir=isdir,
-                   links=links, revision=revision, when=when,
-                   branch=branch, category=category, revlink=revlink,
-                   repository=repository, project=project)
-        c.properties.updateFromProperties(properties)
-        c.number = changeid
-        self._change_cache.add(changeid, c)
-        return c
+    # old ChangeManager methods
 
     def getChangesGreaterThan(self, last_changeid, t=None):
+        # LIES LIES LIES!
         """Return a Deferred that fires with a list of all Change instances
         with numbers greater than the given value, sorted by number. This is
         useful for catching up with everything that's happened since you last
@@ -496,17 +260,6 @@ class DBConnector(util.ComparableMixin):
         changes.sort(key=lambda c: c.number)
         return changes
 
-    def getChangeIdsLessThanIdNow(self, new_changeid):
-        """Return a list of all extant change id's less than the given value,
-        sorted by number."""
-        def txn(t):
-            q = self.quoteq("SELECT changeid FROM changes WHERE changeid < ?")
-            t.execute(q, (new_changeid,))
-            changes = [changeid for (changeid,) in t.fetchall()]
-            changes.sort()
-            return changes
-        return self.runInteractionNow(txn)
-
     def removeChangeNow(self, changeid):
         """Thoroughly remove a change from the database, including all dependent
         tables"""
@@ -516,10 +269,6 @@ class DBConnector(util.ComparableMixin):
                 q = self.quoteq("DELETE FROM %s WHERE changeid = ?" % table)
                 t.execute(q, (changeid,))
         return self.runInteractionNow(txn)
-
-    def getChangesByNumber(self, changeids):
-        return defer.gatherResults([self.getChangeByNumber(changeid)
-                                    for changeid in changeids])
 
     # SourceStamp-manipulating methods
 

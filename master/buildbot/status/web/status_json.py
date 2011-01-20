@@ -1,4 +1,17 @@
-# -*- test-case-name: buildbot.test.test_web_status_json -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Portions Copyright Buildbot Team Members
 # Original Copyright (c) 2010 The Chromium Authors.
 
 """Simple JSON exporter."""
@@ -330,6 +343,20 @@ class HelpResource(HtmlResource):
         template = request.site.buildbot_service.templates.get_template("jsonhelp.html")
         return template.render(**cxt)
 
+class BuilderPendingBuildsJsonResource(JsonResource):
+    help = """Describe pending builds for a builder.
+"""
+    title = 'Builder'
+
+    def __init__(self, status, builder_status):
+        JsonResource.__init__(self, status)
+        self.builder_status = builder_status
+
+    def asDict(self, request):
+        # buildbot.status.builder.BuilderStatus
+        return [b.asDict() for b in self.builder_status.getPendingBuilds()]
+
+
 class BuilderJsonResource(JsonResource):
     help = """Describe a single builder.
 """
@@ -341,6 +368,9 @@ class BuilderJsonResource(JsonResource):
         self.putChild('builds', BuildsJsonResource(status, builder_status))
         self.putChild('slaves', BuilderSlavesJsonResources(status,
                                                            builder_status))
+        self.putChild(
+                'pendingBuilds',
+                BuilderPendingBuildsJsonResource(status, builder_status))
 
     def asDict(self, request):
         # buildbot.status.builder.BuilderStatus
@@ -487,10 +517,10 @@ class BuildStepsJsonResource(JsonResource):
         # Dynamic childs.
         build_step_status = None
         if isinstance(path, int) or _IS_INT.match(path):
-            build_step_status = self.build_status.getSteps[int(path)]
+            build_step_status = self.build_status.getSteps()[int(path)]
         else:
             steps_dict = dict([(step.getName(), step)
-                               for step in self.build_status.getStep()])
+                               for step in self.build_status.getSteps()])
             build_step_status = steps_dict.get(path)
         if build_step_status:
             # Create it on-demand.
@@ -506,7 +536,7 @@ class BuildStepsJsonResource(JsonResource):
         # Only use the number and not the names!
         results = {}
         index = 0
-        for step in self.build_status.getStep():
+        for step in self.build_status.getSteps():
             results[index] = step
             index += 1
         return results
@@ -534,15 +564,13 @@ class ChangesJsonResource(JsonResource):
     def __init__(self, status, changes):
         JsonResource.__init__(self, status)
         for c in changes:
-            # TODO(maruel): Problem with multiple changes with the same number.
-            # Probably try server hack specific so we could fix it on this side
-            # instead. But there is still the problem with multiple pollers from
-            # different repo where the numbers could clash.
-            number = str(c.number)
-            while number in self.children:
-                # TODO(maruel): Do something better?
-                number = str(int(c.number)+1)
-            self.putChild(number, ChangeJsonResource(status, c))
+            # c.number can be None or clash another change if the change was
+            # generated inside buildbot or if using multiple pollers.
+            if c.number is not None and str(c.number) not in self.children:
+                self.putChild(str(c.number), ChangeJsonResource(status, c))
+            else:
+                # Temporary hack since it creates information exposure.
+                self.putChild(str(id(c)), ChangeJsonResource(status, c))
 
     def asDict(self, request):
         """Don't throw an exception when there is no child."""

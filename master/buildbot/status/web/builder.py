@@ -1,3 +1,18 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 from twisted.web import html
 from twisted.web.util import Redirect
@@ -69,18 +84,16 @@ class StatusResourceBuilder(HtmlResource, BuildLineMixin):
             if source.changes:
                 for c in source.changes:
                     changes.append({ 'url' : path_to_change(req, c),
-                                            'who' : c.who})
-            if source.revision:
-                reason = source.revision
-            else:
-                reason = "no changes specified"
+                                     'who' : c.who,
+                                     'revision' : c.revision,
+                                     'repo' : c.repository })
 
             cxt['pending'].append({
                 'when': time.strftime("%b %d %H:%M:%S", time.localtime(pb.getSubmitTime())),
                 'delay': util.formatInterval(util.now() - pb.getSubmitTime()),
-                'reason': reason,
                 'id': pb.brid,
-                'changes' : changes
+                'changes' : changes,
+                'num_changes' : len(changes),
                 })
 
         numbuilds = int(req.args.get('numbuilds', ['5'])[0])

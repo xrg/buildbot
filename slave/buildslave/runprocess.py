@@ -1,9 +1,23 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 """
 Support for running 'shell commands'
 """
 
 import os
-import sys
 import signal
 import types
 import re
@@ -12,10 +26,32 @@ import stat
 from collections import deque
 
 from twisted.python import runtime, log
-from twisted.internet import reactor, defer, protocol, task
+from twisted.internet import reactor, defer, protocol, task, error
 
 from buildslave import util
 from buildslave.exceptions import AbandonChain
+
+def shell_quote(cmd_list):
+    # attempt to quote cmd_list such that a shell will properly re-interpret
+    # it.  The pipes module is only available on UNIX, and Windows "shell"
+    # quoting is indescribably convoluted - so much so that it's not clear it's
+    # reversible.  Also, the quote function is undocumented (although it looks
+    # like it will be documentd soon: http://bugs.python.org/issue9723).
+    # Finally, it has a nasty bug in some versions where an empty string is not
+    # quoted.
+    #
+    # So:
+    #  - use pipes.quote on UNIX, handling '' as a special case
+    #  - use Python's repr() on Windows, as a best effort
+    if runtime.platformType == 'win32':
+        return " ".join([ `e` for e in cmd_list ])
+    else:
+        import pipes
+        def quote(e):
+            if not e:
+                return '""'
+            return pipes.quote(e)
+        return " ".join([ quote(e) for e in cmd_list ])
 
 class LogFileWatcher:
     POLL_INTERVAL = 2
@@ -375,7 +411,8 @@ class RunProcess:
                 argv += list(self.command)
             else:
                 argv = self.command
-            display = " ".join(self.fake_command)
+            # Attempt to format this for use by a shell, although the process isn't perfect
+            display = shell_quote(self.fake_command)
 
         # $PWD usually indicates the current directory; spawnProcess may not
         # update this value, though, so we set it explicitly here.  This causes
@@ -385,10 +422,6 @@ class RunProcess:
 
         # self.stdin is handled in RunProcessPP.connectionMade
 
-        # first header line is the command in plain text, argv joined with
-        # spaces. You should be able to cut-and-paste this into a shell to
-        # obtain the same results. If there are spaces in the arguments, too
-        # bad.
         log.msg(" " + display)
         self._addToBuffers('header', display+"\n")
 
@@ -732,7 +765,7 @@ class RunProcess:
             except OSError:
                 # could be no-such-process, because they finished very recently
                 pass
-            except twisted.internet.error.ProcessExitedAlready:
+            except error.ProcessExitedAlready:
                 # Twisted thinks the process has already exited
                 pass
         if not hit:

@@ -17,7 +17,6 @@ work around this, but true support for multi-tree builds remains elusive.
 @menu
 * Choosing a Change Source::
 * Configuring Change Sources::
-* CVSToys - PBService::
 * Mail-parsing ChangeSources::
 * PBChangeSource::
 * P4Source::
@@ -27,6 +26,7 @@ work around this, but true support for multi-tree builds remains elusive.
 * Change Hooks (HTTP Notifications)::
 * GoogleCodeAtomPoller::
 * GitPoller::
+* GerritChangeSource::
 * Change Source Index::
 @end menu
 
@@ -42,21 +42,11 @@ be useful with them. All of these ChangeSources are in the
 @code{buildbot.changes} module.  The @code{contrib/} scripts mentioned below
 are available on github - @pxref{Contrib Scripts}.
 
-@anchor{depr-src}
-@emph{NOTE:} The CVS change sources FreshCVSSource, FCMaildirSource,
-BonsaiMaildirSource and SyncmailMaildirSource are flagged as
-depreciated. If you are still using them, please send mail to
-the buildbot list.
-
 @table @code
 @item CVS
 
 @itemize @bullet
 @item mail.CVSMaildirSource (watching mail sent by @code{contrib/buildbot_cvs_mail.py} script)
-@item freshcvs.FreshCVSSource (connected via TCP to the freshcvs daemon)
-@item mail.FCMaildirSource (watching for email sent by a freshcvs daemon)
-@item mail.BonsaiMaildirSource (watching for email sent by Bonsai)
-@item mail.SyncmailMaildirSource (watching for email sent by syncmail)
 @item pb.PBChangeSource (listening for connections from @code{buildbot
 sendchange} run in a loginfo script)
 @item pb.PBChangeSource (listening for connections from a long-running
@@ -91,8 +81,6 @@ process
 @item Mercurial
 @itemize @bullet
 @item pb.PBChangeSource (listening for connections from
-@code{contrib/hg_buildbot.py} run in an 'incoming' hook)
-@item pb.PBChangeSource (listening for connections from
 @code{buildbot/changes/hgbuildbot.py} run as an in-process 'changegroup'
 hook)
 @item change_hook in WebStatus (
@@ -116,6 +104,11 @@ hook)
 @item change_hook in WebStatus (
 @code{status.web.change_hook})
 @item @code{gitpoller.GitPoller} (polling a remote git repository)
+@end itemize
+
+@item Repo/Git
+@itemize @bullet
+@item @code{gerritchangesource.GerritChangeSource} connects to Gerrit via SSH to get a live stream of changes
 @end itemize
 
 @end table
@@ -145,9 +138,7 @@ multiple sources, just set @code{c['change_source']} to a list of
 ChangeSources.
 
 @example
-s = FreshCVSSourceNewcred(host="host", port=4519,
-                          user="alice", passwd="secret",
-                          prefix="Twisted")
+s = PBChangeSource()
 c['change_source'] = [s]
 @end example
 
@@ -172,80 +163,6 @@ useful when building from several distinct codebases in the same buildmaster:
 the project string can serve to differentiate the different codebases.
 Schedulers can filter on project, so you can configure different builders to
 run for each project.
-
-@node CVSToys - PBService
-@subsection CVSToys - PBService
-
-@csindex buildbot.changes.freshcvs.FreshCVSSource
-@csindex buildbot.changes.freshcvs.FreshCVSSourceOldcred
-
-The @uref{http://purl.net/net/CVSToys, CVSToys} package provides a
-server which runs on the machine that hosts the CVS repository it
-watches. It has a variety of ways to distribute commit notifications,
-and offers a flexible regexp-based way to filter out uninteresting
-changes. One of the notification options is named @code{PBService} and
-works by listening on a TCP port for clients. These clients subscribe
-to hear about commit notifications.
-
-The buildmaster has a CVSToys-compatible @code{PBService} client built in.
-There are two versions of it, one for old versions of CVSToys (1.0.9 and
-earlier, @code{FreshCVSSourceOldcred}) which used the @code{oldcred}
-authentication framework, and one for newer versions (1.0.10 and later) which
-use @code{newcred}. Both are classes in the @code{buildbot.changes.freshcvs}
-package.
-
-@code{FreshCVSSource} objects are created with the following
-parameters:
-
-@table @samp
-
-@item @code{host} and @code{port}
-these specify where the CVSToys server can be reached
-
-@item @code{user} and @code{passwd}
-these specify the login information for the CVSToys server
-(@code{freshcvs}). These must match the server's values, which are
-defined in the @code{freshCfg} configuration file (which lives in the
-CVSROOT directory of the repository).
-
-@item @code{prefix}
-this is the prefix to be found and stripped from filenames delivered
-by the CVSToys server. Most projects live in sub-directories of the
-main repository, as siblings of the CVSROOT sub-directory, so
-typically this prefix is set to that top sub-directory name.
-
-@end table
-
-@heading Example
-
-To set up the freshCVS server, add a statement like the following to
-your @file{freshCfg} file:
-
-@example
-pb = ConfigurationSet([
-    (None, None, None, PBService(userpass=('foo', 'bar'), port=4519)),
-    ])
-@end example
-
-This will announce all changes to a client which connects to port 4519
-using a username of 'foo' and a password of 'bar'.
-
-Then add a clause like this to your buildmaster's @file{master.cfg}:
-
-@example
-c['change_source'] = FreshCVSSource("cvs.example.com", 4519,
-                                    "foo", "bar",
-                                    prefix="glib/")
-@end example
-
-where "cvs.example.com" is the host that is running the FreshCVS daemon, and
-"glib" is the top-level directory (relative to the repository's root) where
-all your source code lives. Most projects keep one or more projects in the
-same repository (along with CVSROOT/ to hold admin files like loginfo and
-freshCfg); the prefix= argument tells the buildmaster to ignore everything
-outside that directory, and to strip that common prefix from all pathnames
-it handles.
-
 
 @node Mail-parsing ChangeSources
 @subsection Mail-parsing ChangeSources
@@ -278,9 +195,8 @@ Once you've chosen a maildir location and a parsing function, create
 the change source and put it in @code{c['change_source']}:
 
 @example
-from buildbot.changes.mail import SyncmailMaildirSource
-c['change_source'] = SyncmailMaildirSource("~/maildir-buildbot",
-                                           prefix="/trunk/")
+from buildbot.changes.mail import CVSMaildirSource
+c['change_source'] = CVSMaildirSource("/home/buildbot/Mail", urlmaker=fileToUrl)
 @end example
 
 @menu
@@ -288,9 +204,6 @@ c['change_source'] = SyncmailMaildirSource("~/maildir-buildbot",
 * Using Maildirs::
 * Parsing Email Change Messages::
 * CVSMaildirSource::
-* FCMaildirSource::
-* SyncmailMaildirSource::
-* BonsaiMaildirSource::
 * SVNCommitEmailMaildirSource::
 * BzrLaunchpadEmailMaildirSource::
 @end menu
@@ -386,23 +299,12 @@ and commit script in use.
 A couple of common tools used to create these change emails, along with the
 buildbot tools to parse them, are:
 
-@emph{NOTE:} The CVS change sources FCMaildirSource,
-BonsaiMaildirSource and SyncmailMaildirSource are flagged as
-depreciated. If you are still using them, please send mail to
-the buildbot list.
-
 @table @b
 
 @item CVS
 @table @samp
 @item Buildbot CVS MailNotifier
 @ref{CVSMaildirSource}
-@item CVSToys MailNotifier
-@ref{FCMaildirSource}
-@item Bonsai notification
-@ref{BonsaiMaildirSource}
-@item syncmail
-@ref{SyncmailMaildirSource}
 @end table
 
 @item SVN
@@ -581,67 +483,6 @@ The rest of the command line arguments are:
 @end example
 
 
-@node FCMaildirSource
-@subsubsection FCMaildirSource
-
-
-@xref{depr-src,,Depreciated}.
-
-@csindex buildbot.changes.mail.FCMaildirSource
-
-http://twistedmatrix.com/users/acapnotic/wares/code/CVSToys/
-
-This parser works with the CVSToys @code{MailNotification} action,
-which will send email to a list of recipients for each commit. This
-tends to work better than using @code{/bin/mail} from within the
-CVSROOT/loginfo file directly, as CVSToys will batch together all
-files changed during the same CVS invocation, and can provide more
-information (like creating a ViewCVS URL for each file changed).
-
-The Buildbot's @code{FCMaildirSource} knows for to parse these CVSToys
-messages and turn them into Change objects. It can be given two
-parameters: the directory name of the maildir root, and the prefix to
-strip.
-
-@example
-from buildbot.changes.mail import FCMaildirSource
-c['change_source'] = FCMaildirSource("~/maildir-buildbot")
-@end example
-
-@node SyncmailMaildirSource
-@subsubsection SyncmailMaildirSource
-
-@xref{depr-src,,Depreciated}.
-
-@csindex buildbot.changes.mail.SyncmailMaildirSource
-
-http://sourceforge.net/projects/cvs-syncmail
-
-@code{SyncmailMaildirSource} knows how to parse the message format used by
-the CVS ``syncmail'' script.
-
-@example
-from buildbot.changes.mail import SyncmailMaildirSource
-c['change_source'] = SyncmailMaildirSource("~/maildir-buildbot")
-@end example
-
-@node BonsaiMaildirSource
-@subsubsection BonsaiMaildirSource
-
-@xref{depr-src,,Depreciated}.
-
-@csindex buildbot.changes.mail.BonsaiMaildirSource
-
-http://www.mozilla.org/bonsai.html
-
-@code{BonsaiMaildirSource} parses messages sent out by Bonsai, the CVS
-tree-management system built by Mozilla.
-
-@example
-from buildbot.changes.mail import BonsaiMaildirSource
-c['change_source'] = BonsaiMaildirSource("~/maildir-buildbot")
-@end example
-
 @node SVNCommitEmailMaildirSource
 @subsubsection SVNCommitEmailMaildirSource
 
@@ -700,56 +541,43 @@ c['change_source'] = BzrLaunchpadEmailMaildirSource("~/maildir-buildbot", branch
 
 @csindex buildbot.changes.pb.PBChangeSource
 
-The last kind of ChangeSource actually listens on a TCP port for
-clients to connect and push change notices @emph{into} the
-Buildmaster. This is used by the built-in @code{buildbot sendchange}
-notification tool, as well as the VC-specific
-@file{contrib/svn_buildbot.py}, @file{contrib/arch_buildbot.py},
-@file{contrib/hg_buildbot.py} tools, and the
-@code{buildbot.changes.hgbuildbot} hook. These tools are run by the
-repository (in a commit hook script), and connect to the buildmaster
-directly each time a file is comitted. This is also useful for
-creating new kinds of change sources that work on a @code{push} model
-instead of some kind of subscription scheme, for example a script
-which is run out of an email .forward file.
+@code{PBChangeSource} actually listens on a TCP port for clients to connect and
+push change notices @emph{into} the Buildmaster. This is used by the built-in
+@code{buildbot sendchange} notification tool, as well as several
+version-control hook scripts.  This change source is also useful for creating
+new kinds of change sources that work on a @code{push} model instead of some
+kind of subscription scheme, for example a script which is run out of an email
+@file{.forward} file.
+This ChangeSource always runs on the same TCP port as the slaves.  It
+shares the same protocol, and in fact shares the same space of "usernames", so you cannot configure a @code{PBChangeSource} with the same name as a slave.
 
-This ChangeSource can be configured to listen on its own TCP port, or
-it can share the port that the buildmaster is already using for the
-buildslaves to connect. (This is possible because the
-@code{PBChangeSource} uses the same protocol as the buildslaves, and
-they can be distinguished by the @code{username} attribute used when
-the initial connection is established). It might be useful to have it
-listen on a different port if, for example, you wanted to establish
-different firewall rules for that port. You could allow only the SVN
-repository machine access to the @code{PBChangeSource} port, while
-allowing only the buildslave machines access to the slave port. Or you
-could just expose one port and run everything over it. @emph{Note:
-this feature is not yet implemented, the PBChangeSource will always
-share the slave port and will always have a @code{user} name of
-@code{change}, and a passwd of @code{changepw}. These limitations will
-be removed in the future.}.
+If you have a publicly accessible slave port, and are using
+@code{PBChangeSource}, @emph{you must establish a secure username and password
+for the change source}.  If your sendchange credentials are known (e.g., the
+defaults), then your buildmaster is susceptible to injection of arbitrary
+changes, which (depending on the build factories) could lead to arbitrary code
+execution on buildslaves.
 
+Buildbot does not currently allow @code{PBChangeSource} to run on a different
+port than the slave port.  That will be fixed in bug #1708.
 
-The @code{PBChangeSource} is created with the following arguments. All
-are optional.
+The @code{PBChangeSource} is created with the following arguments.
 
 @table @samp
 @item @code{port}
 which port to listen on. If @code{None} (which is the default), it
-shares the port used for buildslave connections. @emph{Not
-Implemented, always set to @code{None}}.
+shares the port used for buildslave connections.
 
 @item @code{user} and @code{passwd}
 The user/passwd account information that the client program must use
-to connect. Defaults to @code{change} and @code{changepw}. @emph{Not
-Implemented, @code{user} is currently always set to @code{change},
-@code{passwd} is always set to @code{changepw}}.
+to connect. Defaults to @code{change} and @code{changepw}.  Do not use
+these defaults on a publicly exposed port!
 
 @item @code{prefix}
 The prefix to be found and stripped from filenames delivered over the
-connection. Any filenames which do not start with this prefix will be
-removed. If all the filenames in a given Change are removed, the that
-whole Change will be dropped. This string should probably end with a
+connection, defaulting to None. Any filenames which do not start with this
+prefix will be removed. If all the filenames in a given Change are removed, the
+that whole Change will be dropped. This string should probably end with a
 directory separator.
 
 This is useful for changes coming from version control systems that
@@ -814,6 +642,25 @@ pushed to this repository in a single @command{hg push} command),
 whereas the @code{incoming} hook is run with just one revision at a
 time. The @code{hgbuildbot.hook} function will only work with the
 @code{changegroup} hook.
+
+If the buildmaster @code{PBChangeSource} is configured to require
+sendchange credentials then you can set these with the @code{auth}
+parameter. When this parameter is not set it defaults to
+@code{change:changepw}, which are the defaults for the @code{user} and
+@code{password} values of a @code{PBChangeSource} which doesn't require
+authentication.
+
+@example
+[hgbuildbot]
+master = buildmaster.example.org:9987
+auth = clientname:supersecret
+@end example
+
+You can set this parameter in either the global @file{/etc/mercurial/hgrc},
+your personal @file{~/.hgrc} file or the repository local @file{.hg/hgrc}
+file. But since this value is stored in plain text, you must make sure that
+it can only be read by those users that need to know the authentication
+credentials.
 
 The @code{[hgbuildbot]} section has two other parameters that you
 might specify, both of which control the name of the branch that is
@@ -926,6 +773,11 @@ append the branch name to the baseURL.
 
 @end table
 
+Note: The bzr smart server (as of version 2.2.2) doesn't know how to resolve
+@code{bzr://} urls into absolute paths so any paths in @code{locations.conf}
+won't match, hence no change notifications will be sent to Buildbot. Setting
+configuration parameters globally or in-branch might still work.
+
 When buildbot no longer has a hardcoded password, it will be a configuration
 option here as well.
 
@@ -970,7 +822,7 @@ A function that maps a pathname, without the leading @code{p4base}, to a
 which effectively disables branch support. You should supply a function
 which understands your repository structure.
 
-@item @code{pollinterval}
+@item @code{pollInterval}
 How often to poll, in seconds. Defaults to 600 (10 minutes).
 
 @item @code{histmax}
@@ -1007,8 +859,33 @@ humans and machines. In this case, the buildbot's change source forms
 a query which asks about any files in the specified branch which have
 changed since the last query.
 
-Please take a look at the BonsaiPoller docstring for details about the
-arguments it accepts.
+@code{BonsaiPoller} accepts the following arguments:
+
+@table @code
+@item bonsaiURL
+The base URL of the Bonsai server, e.g., @code{http://bonsai.mozilla.org}
+
+@item module
+The module to look for changes in. Commonly this is @code{all}.
+
+@item branch
+The branch to look for changes in.  This will appear in the @code{branch} field
+of the resulting change objects.
+
+@item tree
+The tree to look for changes in.  Commonly this is @code{all}.
+
+@item cvsroot
+The CVS root of the repository.  Usually this is @code{/cvsroot}.
+
+@item pollInterval
+The time (in seconds) between queries for changes.
+
+@item project
+The project name to attach to all change objects produced by this change
+source.
+
+@end table
 
 @node SVNPoller
 @subsection SVNPoller
@@ -1066,7 +943,7 @@ authenticate to the svn server before you can do @code{svn info} or
 Like @code{svnuser}, this will cause a @code{--password} argument to
 be passed to all svn commands.
 
-@item pollinterval
+@item pollInterval
 How often to poll, in seconds. Defaults to 600 (checking once every 10
 minutes). Lower this if you want the buildbot to notice changes
 faster, raise it if you want to reduce the network and CPU load on
@@ -1341,8 +1218,10 @@ processes any changes. It requires its own working directory for operation, whic
 can be specified via the @code{workdir} property. By default a temporary directory will
 be used.
 
-The @code{GitPoller} has only been tested with @code{git} version 
-@code{1.7.0.3} - your mileage may vary.
+The @code{GitPoller} has mostly been tested with Git version @code{1.7.0.3},
+although it does not use any obscure Git features and should work with any
+version.  If you discover any incopmatibilities, please report them to the
+Buildbot developers.
 
 @code{GitPoller} accepts the following arguments:
 
@@ -1355,13 +1234,24 @@ the git-url that describes the remote repository, e.g. @code{git@@example.com:fo
 the desired branch to fetch, will default to @code{'master'}
 
 @item workdir
-the directory where the poller should keep its local repository. will default to @code{<tempdir>/gitpoller_work}
+the directory where the poller should keep its local repository. will default
+to @code{<tempdir>/gitpoller_work}, which is probably not what you want.  If
+this is a relative path, it will be interpreted relative to the master's
+basedir.
                 
-@item pollinterval
-interval in seconds between polls, default is 10 minutes
+@item pollInterval
+interval in seconds between polls, default is 10 minutes.
 
 @item gitbin
 path to the git binary, defaults to just @code{'git'}
+
+@item fetch_refspec
+One or more refspecs to use when fetching updates for the repository. By default,
+the @code{GitPoller} will simply fetch all refs. If your repository is large
+enough that this would be unwise (or active enough on irrelevant branches that
+it'd be a waste of time to fetch them all), you may wish to specify only a certain
+refs to be updated. (A single refspec may be passed as a string, or multiple refspecs
+may be passed as a list or set of strings.)
 
 @item category
 Set the category to be used for the changes produced by the @code{GitPoller}.
@@ -1383,7 +1273,97 @@ from buildbot.changes.gitpoller import GitPoller
 c['change_source'] = GitPoller('git@@example.com:foobaz/myrepo.git',
                                branch='great_new_feature')
 @end example
-                  
+
+@node GerritChangeSource
+@subsection GerritChangeSource
+@csindex buildbot.changes.gerritchangesource.GerritChangeSource
+
+The @code{GerritChangeSource} class connects to a Gerrit server by its SSH
+interface and uses its event source mechanism,
+@uref{http://gerrit.googlecode.com/svn/documentation/2.1.6/cmd-stream-events.html, gerrit stream-events}.
+
+This class adds a change to the buildbot system for each of the following events:
+@table @code
+@item patchset-created
+A change is proposed for review. Automatic checks like @code{checkpatch.pl} can be
+automatically triggered. Beware of what kind of automatic task you trigger.
+At this point, no trusted human has reviewed the code, and a patch could be
+specially crafted by an attacker to compromise your buildslaves.
+@item ref-updated
+A change has been merged into the repository. Typically, this kind of event can lead
+to a complete rebuild of the project, and upload binaries to an incremental build
+results server.
+@end table
+
+This class will populate the property list of the triggered build with the info
+received from Gerrit server in JSON format.
+
+In case of ``patchset-created'' event, these properties will be:
+@table @code
+@item @code{event.change.branch}
+Branch of the Change
+@item @code{event.change.id}
+Change's ID in the Gerrit system (the ChangeId: in commit comments)
+@item @code{event.change.number}
+Change's number in Gerrit system
+@item @code{event.change.owner.email}
+Change's owner email (owner is first uploader)
+@item @code{event.change.owner.name}
+Change's owner name
+@item @code{event.change.project}
+Project of the Change
+@item @code{event.change.subject}
+Change's subject
+@item @code{event.change.url}
+URL of the Change in the Gerrit's web interface
+@item @code{event.patchSet.number}
+Patchset's version number
+@item @code{event.patchSet.ref}
+Patchset's Gerrit "virtual branch"
+@item @code{event.patchSet.revision}
+Patchset's Git commit ID
+@item @code{event.patchSet.uploader.email}
+Patchset uploader's email (owner is first uploader)
+@item @code{event.patchSet.uploader.name}
+Patchset uploader's name (owner is first uploader)
+@item @code{event.type}
+Event type (``patchset-created'')
+@item @code{event.uploader.email}
+Patchset uploader's email
+@item @code{event.uploader.name}
+Patchset uploader's name
+@end table
+
+In case of ``ref-updated'' event, these properties will be:
+@table @code
+@item @code{event.refUpdate.newRev}
+New Git commit ID (after merger)
+@item @code{event.refUpdate.oldRev}
+Previous Git commit ID (before merger)
+@item @code{event.refUpdate.project}
+Project that was updated
+@item @code{event.refUpdate.refName}
+Branch that was updated
+@item @code{event.submitter.email}
+Submitter's email (merger responsible)
+@item @code{event.submitter.name}
+Submitter's name (merger responsible)
+@item @code{event.type}
+Event type (``ref-updated'')
+@item @code{event.submitter.email}
+Submitter's email (merger responsible)
+@item @code{event.submitter.name}
+Submitter's name (merger responsible)
+@end table
+
+@heading Example
+@example
+from buildbot.changes.gerritchangesource import GerritChangeSource
+c['change_source'] = GerritChangeSource(gerrit_server, gerrit_user)
+@end example
+see 
+@code{master/docs/examples/repo_gerrit.cfg} in the Buildbot distribution for an example setup of @code{GerritChangeSource}.
+
 @node Change Hooks (HTTP Notifications)
 @subsection Change Hooks (HTTP Notifications)
 

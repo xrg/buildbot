@@ -1,8 +1,22 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 # N.B.: don't import anything that might pull in a reactor yet. Some of our
 # subcommands want to load modules that need the gtk reactor.
-import os, sys, stat, re, time
-import traceback
-from twisted.python import usage, util, runtime
+import os, sys, re, time
+from twisted.python import usage
 
 def isBuildslaveDir(dir):
     buildbot_tac = os.path.join(dir, "buildbot.tac")
@@ -212,7 +226,6 @@ def stop(config, signame="TERM", wait=False, returnFalseOnNotRunning=False):
         print "never saw process go away"
 
 def restart(config):
-    basedir = config['basedir']
     quiet = config['quiet']
 
     if not isBuildslaveDir(config['basedir']):

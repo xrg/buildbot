@@ -1,11 +1,20 @@
 #!/usr/bin/env python
 #
-# This software may be freely redistributed under the terms of the GNU
-# general public license.
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
 #
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 """
 Standard setup script.
 """
@@ -214,7 +223,6 @@ setup_args = {
               "buildbot.schedulers",
               "buildbot.scripts",
               "buildbot.db",
-              "buildbot.db.schema",
               "buildbot.util",
               "buildbot.test",
               "buildbot.test.fake",
@@ -222,18 +230,28 @@ setup_args = {
               "buildbot.test.util",
               "buildbot.test.regressions",
               ],
-    'data_files': [("buildbot", ["buildbot/buildbot.png"]),
-                include("buildbot/db/schema", "*.sql"),
-                ("buildbot/clients", ["buildbot/clients/debug.glade"]),
-                ("buildbot/status/web/files",
-                 ["buildbot/status/web/files/default.css",
-                  "buildbot/status/web/files/bg_gradient.jpg",
-                  "buildbot/status/web/files/robots.txt",
-                  "buildbot/status/web/files/favicon.ico",
-                  ]),
+    'data_files': [
+                ("buildbot", [
+                    "buildbot/buildbot.png",
+                ]),
+                ("buildbot/db/migrate", [
+                    "buildbot/db/migrate/migrate.cfg",
+                ]),
+                include("buildbot/db/migrate/versions", "*.py"),
+                ("buildbot/clients", [
+                    "buildbot/clients/debug.glade",
+                ]),
+                ("buildbot/status/web/files", [
+                    "buildbot/status/web/files/default.css",
+                    "buildbot/status/web/files/bg_gradient.jpg",
+                    "buildbot/status/web/files/robots.txt",
+                    "buildbot/status/web/files/favicon.ico",
+                ]),
                 include("buildbot/status/web/templates", '*.html'),
                 include("buildbot/status/web/templates", '*.xml'),
-                ("buildbot/scripts", ["buildbot/scripts/sample.cfg"]),
+                ("buildbot/scripts", [
+                    "buildbot/scripts/sample.cfg",
+                ]),
                 ],
     'scripts': scripts,
     'cmdclass': {'install_data': install_data_twisted,
@@ -260,8 +278,11 @@ except ImportError:
 else:
     ## dependencies
     setup_args['install_requires'] = [
-        'twisted >= 2.0.0',
+        'twisted >= 8.0.0',
         'Jinja2 >= 2.1',
+        'sqlalchemy >= 0.6',
+        # buildbot depends on sqlalchemy internals. See buildbot.db.model.
+        'sqlalchemy-migrate == 0.6',
     ]
     # Python-2.6 and up includes json
     if not py_26:

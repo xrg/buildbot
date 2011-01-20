@@ -1,4 +1,18 @@
-# -*- test-case-name: buildbot.test.test_transfer -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 import os.path, tarfile, tempfile
 try:
@@ -55,6 +69,9 @@ class _FileWriter(pb.Referenceable):
         """
         self.fp.close()
         self.fp = None
+        # on windows, os.rename does not automatically unlink, so do it manually
+        if os.path.exists(self.destfile):
+            os.unlink(self.destfile)
         os.rename(self.tmpname, self.destfile)
         self.tmpname = None
         if self.mode is not None:
@@ -167,6 +184,9 @@ class _TransferBuildStep(BuildStep):
     functionality.
     """
     DEFAULT_WORKDIR = "build"           # is this redundant?
+
+    haltOnFailure = True
+    flunkOnFailure = True
 
     def setDefaultWorkdir(self, workdir):
         if self.workdir is None:
@@ -545,7 +565,7 @@ class StringDownload(_TransferBuildStep):
                                   os.path.basename(slavedest)])
 
         # setup structures for reading the file
-        fp = StringIO(self.s)
+        fp = StringIO(properties.render(self.s))
         fileReader = _FileReader(fp)
 
         # default arguments

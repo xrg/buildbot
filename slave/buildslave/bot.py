@@ -1,10 +1,26 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 import os.path
 import socket
 import sys
+import signal
 
 from twisted.spread import pb
 from twisted.python import log
-from twisted.internet import reactor, defer, error
+from twisted.internet import error, reactor, task
 from twisted.application import service, internet
 from twisted.cred import credentials
 
@@ -38,9 +54,6 @@ class SlaveBuilder(pb.Referenceable, service.Service):
     # when the step is started
     remoteStep = None
 
-    # useful for replacing the reactor in tests
-    _reactor = reactor
-
     def __init__(self, name):
         #service.Service.__init__(self) # Service has no __init__ method
         self.setName(name)
@@ -71,9 +84,9 @@ class SlaveBuilder(pb.Referenceable, service.Service):
     def activity(self):
         bot = self.parent
         if bot:
-            buildslave = bot.parent
-            if buildslave:
-                bf = buildslave.bf
+            bslave = bot.parent
+            if bslave:
+                bf = bslave.bf
                 bf.activity()
 
     def remote_setMaster(self, remote):
@@ -213,7 +226,8 @@ class SlaveBuilder(pb.Referenceable, service.Service):
 
     def remote_shutdown(self):
         log.msg("slave shutting down on command from master")
-        self._reactor.stop()
+        log.msg("NOTE: master is using deprecated slavebuilder.shutdown method")
+        reactor.stop()
 
 
 class Bot(pb.Referenceable, service.MultiService):
@@ -285,19 +299,27 @@ class Bot(pb.Referenceable, service.MultiService):
 
         files = {}
         basedir = os.path.join(self.basedir, "info")
-        if not os.path.isdir(basedir):
-            return files
-        for f in os.listdir(basedir):
-            filename = os.path.join(basedir, f)
-            if os.path.isfile(filename):
-                files[f] = open(filename, "r").read()
+        if os.path.isdir(basedir):
+            for f in os.listdir(basedir):
+                filename = os.path.join(basedir, f)
+                if os.path.isfile(filename):
+                    files[f] = open(filename, "r").read()
+        files['environ'] = os.environ.copy()
+        files['system'] = os.name
+        files['basedir'] = self.basedir
         return files
 
     def remote_getVersion(self):
         """Send our version back to the Master"""
         return buildslave.version
 
-
+    def remote_shutdown(self):
+        log.msg("slave shutting down on command from master")
+        # there's no good way to learn that the PB response has been delivered,
+        # so we'll just wait a bit, in hopes the master hears back.  Masters are
+        # resilinet to slaves dropping their connections, so there is no harm
+        # if this timeout is too short.
+        reactor.callLater(0.2, reactor.stop)
 
 class BotFactory(ReconnectingPBClientFactory):
     # 'keepaliveInterval' serves two purposes. The first is to keep the
@@ -430,9 +452,9 @@ class BotFactory(ReconnectingPBClientFactory):
 class BuildSlave(service.MultiService):
     def __init__(self, buildmaster_host, port, name, passwd, basedir,
                  keepalive, usePTY, keepaliveTimeout=30, umask=None,
-                 maxdelay=300, unicode_encoding=None):
+                 maxdelay=300, unicode_encoding=None, allow_shutdown=None):
         log.msg("Creating BuildSlave -- version: %s" % buildslave.version)
-        self.recordHostname()
+        self.recordHostname(basedir)
         service.MultiService.__init__(self)
         bot = Bot(basedir, usePTY, unicode_encoding=unicode_encoding)
         bot.setServiceParent(self)
@@ -440,16 +462,26 @@ class BuildSlave(service.MultiService):
         if keepalive == 0:
             keepalive = None
         self.umask = umask
+
+        if allow_shutdown == 'signal':
+            if not hasattr(signal, 'SIGHUP'):
+                raise ValueError("Can't install signal handler")
+        elif allow_shutdown == 'file':
+            self.shutdown_file = os.path.join(basedir, 'shutdown.stamp')
+            self.shutdown_mtime = 0
+
+        self.allow_shutdown = allow_shutdown
         bf = self.bf = BotFactory(buildmaster_host, port, keepalive, keepaliveTimeout, maxdelay)
         bf.startLogin(credentials.UsernamePassword(name, passwd), client=bot)
         self.connection = c = internet.TCPClient(buildmaster_host, port, bf)
         c.setServiceParent(self)
 
-    def recordHostname(self):
+    def recordHostname(self, basedir):
         "Record my hostname in twistd.hostname, for user convenience"
         log.msg("recording hostname in twistd.hostname")
+        filename = os.path.join(basedir, "twistd.hostname")
         try:
-            open("twistd.hostname", "w").write("%s\n" % socket.getfqdn())
+            open(filename, "w").write("%s\n" % socket.getfqdn())
         except:
             log.msg("failed - ignoring")
 
@@ -458,7 +490,51 @@ class BuildSlave(service.MultiService):
             os.umask(self.umask)
         service.MultiService.startService(self)
 
+        if self.allow_shutdown == 'signal':
+            log.msg("Setting up SIGHUP handler to initiate shutdown")
+            signal.signal(signal.SIGHUP, self._handleSIGHUP)
+        elif self.allow_shutdown == 'file':
+            log.msg("Watching %s's mtime to initiate shutdown" % self.shutdown_file)
+            if os.path.exists(self.shutdown_file):
+                self.shutdown_mtime = os.path.getmtime(self.shutdown_file)
+            l = task.LoopingCall(self._checkShutdownFile)
+            l.start(interval=10)
+
     def stopService(self):
         self.bf.continueTrying = 0
         self.bf.stopTrying()
         service.MultiService.stopService(self)
+
+    def _handleSIGHUP(self, *args):
+        log.msg("Initiating shutdown because we got SIGHUP")
+        return self.gracefulShutdown()
+
+    def _checkShutdownFile(self):
+        if os.path.exists(self.shutdown_file) and \
+                os.path.getmtime(self.shutdown_file) > self.shutdown_mtime:
+            log.msg("Initiating shutdown because %s was touched" % self.shutdown_file)
+            self.gracefulShutdown()
+
+            # In case the shutdown fails, update our mtime so we don't keep
+            # trying to shutdown over and over again.
+            # We do want to be able to try again later if the master is
+            # restarted, so we'll keep monitoring the mtime.
+            self.shutdown_mtime = os.path.getmtime(self.shutdown_file)
+
+    def gracefulShutdown(self):
+        """Start shutting down"""
+        if not self.bf.perspective:
+            log.msg("No active connection, shutting down NOW")
+            reactor.stop()
+
+        log.msg("Telling the master we want to shutdown after any running builds are finished")
+        d = self.bf.perspective.callRemote("shutdown")
+        def _shutdownfailed(err):
+            if err.check(AttributeError):
+                log.msg("Master does not support slave initiated shutdown.  Upgrade master to 0.8.3 or later to use this feature.")
+            else:
+                log.msg('callRemote("shutdown") failed')
+                log.err(err)
+
+        d.addErrback(_shutdownfailed)
+        return d

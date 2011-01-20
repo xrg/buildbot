@@ -1,3 +1,18 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 #!/usr/bin/env python
 """
 github_buildbot.py is based on git_buildbot.py
@@ -13,7 +28,6 @@ import logging
 import re
 import sys
 import traceback
-from buildbot.changes.changes import Change
 import datetime
 from twisted.python import log
 import calendar
@@ -118,31 +132,18 @@ def process_change(payload, user, repo, repo_url):
                 if 'removed' in commit:
                     files.extend(commit['removed'])
                 when =  convertTime( commit['timestamp'])
-                change = {'revision': commit['id'],
-                     'revlink': commit['url'],
-                     'comments': commit['message'],
-                     'branch': branch,
-                     'who': commit['author']['name'] 
-                            + " <" + commit['author']['email'] + ">",
-                     'files': files,
-                     'links': [commit['url']],
-                     'properties': {'repository': repo_url},
-                }
-    
-                log.msg("New revision: %s" % change['revision'][:8])
-                for key, value in change.iteritems():
-                    logging.debug("  %s: %s" % (key, value))
-                    changeObject = Change(\
-                        who      = commit['author']['name'] 
-                                    + " <" + commit['author']['email'] + ">",
-                        files    = files,
-                        comments = commit['message'], 
-                        links    = [commit['url']],
-                        revision = commit['id'],
-                        when     = when,
-                        branch   = branch,
-                        revlink  = commit['url'], 
-                        repository = repo_url)  
-                changes.append(changeObject) 
+                log.msg("New revision: %s" % commit['id'][:8])
+                chdict = dict(
+                    who      = commit['author']['name'] 
+                                + " <" + commit['author']['email'] + ">",
+                    files    = files,
+                    comments = commit['message'], 
+                    links    = [commit['url']],
+                    revision = commit['id'],
+                    when     = when,
+                    branch   = branch,
+                    revlink  = commit['url'], 
+                    repository = repo_url)  
+                changes.append(chdict) 
             return changes
         

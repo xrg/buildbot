@@ -1,13 +1,18 @@
-# -*- test-case-name: buildbot.test.test_status -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
 
-from zope.interface import implements
-from twisted.python import log, runtime
-from twisted.persisted import styles
-from twisted.internet import reactor, defer, threads
-from twisted.protocols import basic
-from buildbot.process.properties import Properties
-from buildbot.util import collections
-from buildbot.util.eventual import eventually
 
 import weakref
 import os, shutil, re, urllib, itertools
@@ -18,7 +23,13 @@ from cStringIO import StringIO
 from bz2 import BZ2File
 from gzip import GzipFile
 
-# sibling imports
+from zope.interface import implements
+from twisted.python import log, runtime
+from twisted.persisted import styles
+from twisted.internet import reactor, defer, threads
+from buildbot.process.properties import Properties
+from buildbot.util import collections, netstrings
+from buildbot.util.eventual import eventually
 from buildbot import interfaces, util, sourcestamp
 
 SUCCESS, WARNINGS, FAILURE, SKIPPED, EXCEPTION, RETRY = range(6)
@@ -55,10 +66,11 @@ STDERR = interfaces.LOG_CHANNEL_STDERR
 HEADER = interfaces.LOG_CHANNEL_HEADER
 ChunkTypes = ["stdout", "stderr", "header"]
 
-class LogFileScanner(basic.NetstringReceiver):
+class LogFileScanner(netstrings.NetstringParser):
     def __init__(self, chunk_cb, channels=[]):
         self.chunk_cb = chunk_cb
         self.channels = channels
+        netstrings.NetstringParser.__init__(self)
 
     def stringReceived(self, line):
         channel = int(line[0])
@@ -812,7 +824,9 @@ class BuildStepStatus(styles.Versioned):
     # note that these are created when the Build is set up, before each
     # corresponding BuildStep has started.
     implements(interfaces.IBuildStepStatus, interfaces.IStatusEvent)
+
     persistenceVersion = 3
+    persistenceForgets = ( 'wasUpgraded', )
 
     started = None
     finished = None
@@ -1086,18 +1100,24 @@ class BuildStepStatus(styles.Versioned):
         # point the logs to this object
         for loog in self.logs:
             loog.step = self
+        self.watchers = []
+        self.finishedWatchers = []
+        self.updates = {}
 
     def upgradeToVersion1(self):
         if not hasattr(self, "urls"):
             self.urls = {}
+        self.wasUpgraded = True
 
     def upgradeToVersion2(self):
         if not hasattr(self, "statistics"):
             self.statistics = {}
+        self.wasUpgraded = True
 
     def upgradeToVersion3(self):
         if not hasattr(self, "step_number"):
             self.step_number = 0
+        self.wasUpgraded = True
 
     def asDict(self):
         result = {}
@@ -1115,15 +1135,17 @@ class BuildStepStatus(styles.Versioned):
         result['eta'] = self.getETA()
         result['urls'] = self.getURLs()
         result['step_number'] = self.step_number
-        # TODO(maruel): Move that to a sub-url or just publish the log_url
-        # instead.
-        #result['logs'] = self.getLogs()
+        result['logs'] = [[l.getName(),
+            self.build.builder.status.getURLForThing(l)]
+                for l in self.getLogs()]
         return result
 
 
 class BuildStatus(styles.Versioned):
     implements(interfaces.IBuildStatus, interfaces.IStatusEvent)
+
     persistenceVersion = 3
+    persistenceForgets = ( 'wasUpgraded', )
 
     source = None
     reason = None
@@ -1474,15 +1496,18 @@ class BuildStatus(styles.Versioned):
             self.source = source
             self.changes = source.changes
             del self.sourceStamp
+        self.wasUpgraded = True
 
     def upgradeToVersion2(self):
         self.properties = {}
+        self.wasUpgraded = True
 
     def upgradeToVersion3(self):
         # in version 3, self.properties became a Properties object
         propdict = self.properties
         self.properties = Properties()
         self.properties.update(propdict, "Upgrade from previous version")
+        self.wasUpgraded = True
 
     def upgradeLogfiles(self):
         # upgrade any LogFiles that need it. This must occur after we've been
@@ -1543,8 +1568,8 @@ class BuildStatus(styles.Versioned):
         result['slave'] = self.getSlavename()
         # TODO(maruel): Add.
         #result['test_results'] = self.getTestResults()
-        # TODO(maruel): Include the url? It's too heavy otherwise.
-        #result['logs'] = self.getLogs()
+        result['logs'] = [[l.getName(),
+            self.builder.status.getURLForThing(l)] for l in self.getLogs()]
         result['eta'] = self.getETA()
         result['steps'] = [bss.asDict() for bss in self.steps]
         if self.getCurrentStep():
@@ -1575,7 +1600,9 @@ class BuilderStatus(styles.Versioned):
     """
 
     implements(interfaces.IBuilderStatus, interfaces.IEventSource)
+
     persistenceVersion = 1
+    persistenceForgets = ( 'wasUpgraded', )
 
     # these limit the amount of memory we consume, as well as the size of the
     # main Builder pickle. The Build and LogFile pickles on disk must be
@@ -1649,7 +1676,7 @@ class BuilderStatus(styles.Versioned):
     def reconfigFromBuildmaster(self, buildmaster):
         # Note that we do not hang onto the buildmaster, since this object
         # gets pickled and unpickled.
-        if buildmaster.buildCacheSize:
+        if buildmaster.buildCacheSize is not None:
             self.buildCacheSize = buildmaster.buildCacheSize
 
     def upgradeToVersion1(self):
@@ -1658,6 +1685,7 @@ class BuilderStatus(styles.Versioned):
             del self.slavename
         if hasattr(self, 'nextBuildNumber'):
             del self.nextBuildNumber # determineNextBuildNumber chooses this
+        self.wasUpgraded = True
 
     def determineNextBuildNumber(self):
         """Scan our directory of saved BuildStatus instances to determine
@@ -1734,8 +1762,19 @@ class BuilderStatus(styles.Versioned):
             log.msg("Loading builder %s's build %d from on-disk pickle"
                 % (self.name, number))
             build = load(open(filename, "rb"))
-            styles.doUpgrade()
             build.builder = self
+
+            # (bug #1068) if we need to upgrade, we probably need to rewrite
+            # this pickle, too.  We determine this by looking at the list of
+            # Versioned objects that have been unpickled, and (after doUpgrade)
+            # checking to see if any of them set wasUpgraded.  The Versioneds'
+            # upgradeToVersionNN methods all set this.
+            versioneds = styles.versionedsToUpgrade
+            styles.doUpgrade()
+            if True in [ hasattr(o, 'wasUpgraded') for o in versioneds.values() ]:
+                log.msg("re-writing upgraded build pickle")
+                build.saveYourself()
+
             # handle LogFiles from after 0.5.0 and before 0.6.5
             build.upgradeLogfiles()
             # check that logfiles exist
@@ -1756,12 +1795,12 @@ class BuilderStatus(styles.Versioned):
         gc.collect()
 
         # get the horizons straight
-        if self.buildHorizon:
+        if self.buildHorizon is not None:
             earliest_build = self.nextBuildNumber - self.buildHorizon
         else:
             earliest_build = 0
 
-        if self.logHorizon:
+        if self.logHorizon is not None:
             earliest_log = self.nextBuildNumber - self.logHorizon
         else:
             earliest_log = 0
@@ -2143,10 +2182,7 @@ class BuilderStatus(styles.Versioned):
         result['cachedBuilds'] = cached_builds
         result['currentBuilds'] = current_builds
         result['state'] = self.getState()[0]
-        # BuildRequestStatus doesn't have a number so display the SourceStamp.
-        result['pendingBuilds'] = [
-            b.getSourceStamp().asDict() for b in self.getPendingBuilds()
-        ]
+        result['pendingBuilds'] = len(self.getPendingBuilds())
         return result
 
 
@@ -2264,6 +2300,7 @@ class Status:
                         pickles) can be stored
         """
         self.botmaster = botmaster
+        self.master = botmaster.parent # TODO: temporary; this should get set more formally
         self.db = None
         self.basedir = basedir
         self.watchers = []
@@ -2301,11 +2338,11 @@ class Status:
     # methods called by our clients
 
     def getProjectName(self):
-        return self.botmaster.parent.projectName
+        return self.master.projectName
     def getProjectURL(self):
-        return self.botmaster.parent.projectURL
+        return self.master.projectURL
     def getBuildbotURL(self):
-        return self.botmaster.parent.buildbotURL
+        return self.master.buildbotURL
 
     def getURLForThing(self, thing):
         prefix = self.getBuildbotURL()
@@ -2365,13 +2402,14 @@ class Status:
                 urllib.quote(log.getName()))
 
     def getChangeSources(self):
-        return list(self.botmaster.parent.change_svc)
+        return list(self.master.change_svc)
 
     def getChange(self, number):
-        return self.botmaster.parent.change_svc.getChangeNumberedNow(number)
+        """Get a Change object; returns a deferred"""
+        return self.master.db.changes.getChangeInstance(number)
 
     def getSchedulers(self):
-        return self.botmaster.parent.allSchedulers()
+        return self.master.allSchedulers()
 
     def getBuilderNames(self, categories=None):
         if categories == None:
@@ -2485,7 +2523,18 @@ class Status:
         builder_status = None
         try:
             builder_status = load(open(filename, "rb"))
+            
+            # (bug #1068) if we need to upgrade, we probably need to rewrite
+            # this pickle, too.  We determine this by looking at the list of
+            # Versioned objects that have been unpickled, and (after doUpgrade)
+            # checking to see if any of them set wasUpgraded.  The Versioneds'
+            # upgradeToVersionNN methods all set this.
+            versioneds = styles.versionedsToUpgrade
             styles.doUpgrade()
+            if True in [ hasattr(o, 'wasUpgraded') for o in versioneds.values() ]:
+                log.msg("re-writing upgraded builder pickle")
+                builder_status.saveYourself()
+
         except IOError:
             log.msg("no saved status pickle, creating a new one")
         except:

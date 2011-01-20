@@ -1,11 +1,25 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 import os
 import shutil
+import mock
 
 from twisted.trial import unittest
 from twisted.internet import defer, reactor
 from twisted.python import failure, log
-from zope.interface import implements
-import mock
 
 from buildslave.test.util import command
 from buildslave.test.fake.remote import FakeRemote
@@ -54,17 +68,18 @@ class TestBot(unittest.TestCase):
         os.makedirs(infodir)
         open(os.path.join(infodir, "admin"), "w").write("testy!")
         open(os.path.join(infodir, "foo"), "w").write("bar")
+        open(os.path.join(infodir, "environ"), "w").write("something else")
 
         d = self.bot.callRemote("getSlaveInfo")
         def check(info):
-            self.assertEqual(info, dict(admin='testy!', foo='bar'))
+            self.assertEqual(info, dict(admin='testy!', foo='bar', environ=os.environ, system=os.name, basedir=self.basedir))
         d.addCallback(check)
         return d
 
     def test_getSlaveInfo_nodir(self):
         d = self.bot.callRemote("getSlaveInfo")
         def check(info):
-            self.assertEqual(info, {})
+            self.assertEqual(set(info.keys()), set(['environ','system','basedir']))
         d.addCallback(check)
         return d
 
@@ -143,6 +158,14 @@ class TestBot(unittest.TestCase):
 
         return d
 
+    def test_shutdown(self):
+        d1 = defer.Deferred()
+        self.patch(reactor, "stop", lambda : d1.callback(None))
+        d2 = self.bot.callRemote("shutdown")
+        # don't return until both the shutdown method has returned, and
+        # reactor.stop has been called
+        return defer.gatherResults([d1, d2])
+
 class FakeStep(object):
     "A fake master-side BuildStep that records its activities."
     def __init__(self):
@@ -196,10 +219,11 @@ class TestSlaveBuilder(command.CommandTestMixin, unittest.TestCase):
 
     def test_shutdown(self):
         # don't *actually* shut down the reactor - that would be silly
-        self.patch(bot.SlaveBuilder, "_reactor", mock.Mock())
+        stop = mock.Mock()
+        self.patch(reactor, "stop", stop)
         d = self.sb.callRemote("shutdown")
         def check(_):
-            self.assertTrue(bot.SlaveBuilder._reactor.stop.called)
+            self.assertTrue(stop.called)
         d.addCallback(check)
         return d
 

@@ -1,3 +1,18 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 import random, weakref
 from zope.interface import implements
@@ -391,6 +406,7 @@ class Builder(pb.Referenceable, service.MultiService):
         self.eventHorizon = setup.get('eventHorizon')
         self.mergeRequests = setup.get('mergeRequests', True)
         self.properties = setup.get('properties', {})
+        self.category = setup.get('category', None)
 
         # build/wannabuild slots: Build objects move along this sequence
         self.building = []
@@ -450,12 +466,15 @@ class Builder(pb.Referenceable, service.MultiService):
             diffs.append('nextSlave changed from %s to %s' % (self.nextSlave, setup.get('nextSlave')))
         if setup.get('nextBuild') != self.nextBuild:
             diffs.append('nextBuild changed from %s to %s' % (self.nextBuild, setup.get('nextBuild')))
-        if setup['buildHorizon'] != self.buildHorizon:
+        if setup.get('buildHorizon', None) != self.buildHorizon:
             diffs.append('buildHorizon changed from %s to %s' % (self.buildHorizon, setup['buildHorizon']))
-        if setup['logHorizon'] != self.logHorizon:
+        if setup.get('logHorizon', None) != self.logHorizon:
             diffs.append('logHorizon changed from %s to %s' % (self.logHorizon, setup['logHorizon']))
-        if setup['eventHorizon'] != self.eventHorizon:
+        if setup.get('eventHorizon', None) != self.eventHorizon:
             diffs.append('eventHorizon changed from %s to %s' % (self.eventHorizon, setup['eventHorizon']))
+        if setup.get('category', None) != self.category:
+            diffs.append('category changed from %r to %r' % (self.category, setup.get('category', None)))
+
         return diffs
 
     def __repr__(self):
@@ -614,6 +633,10 @@ class Builder(pb.Referenceable, service.MultiService):
         # all pending builds are stored in the DB, so we don't have to do
         # anything to claim them. The old builder will be stopService'd,
         # which should make sure they don't start any new work
+
+        # this is kind of silly, but the builder status doesn't get updated
+        # when the config changes, yet it stores the category.  So:
+        self.builder_status.category = self.category
 
         # old.building (i.e. builds which are still running) is not migrated
         # directly: it keeps track of builds which were in progress in the

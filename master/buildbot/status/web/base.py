@@ -1,3 +1,18 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 import urlparse, urllib, time, re
 import os, cgi, sys, locale
@@ -55,7 +70,7 @@ Return a new Properties object containing each property found in req.
     while True:
         pname = req.args.get("property%dname" % i, [""])[0]
         pvalue = req.args.get("property%dvalue" % i, [""])[0]
-        if not pname or not pvalue:
+        if not pname:
             break
         if not re.match(r'^[\w\.\-\/\~:]*$', pname) \
                 or not re.match(r'^[\w\.\-\/\~:]*$', pvalue):
@@ -201,6 +216,24 @@ class HtmlResource(resource.Resource, ContextMixin):
         if self.addSlash and path == "" and len(request.postpath) == 0:
             return self
         return resource.Resource.getChild(self, path, request)
+
+
+    def content(self, req, context):
+        """
+        Generate content using the standard layout and the result of the C{body}
+        method.
+
+        This is suitable for the case where a resource just wants to generate
+        the body of a page.  It depends on another method, C{body}, being
+        defined to accept the request object and return a C{str}.  C{render}
+        will call this method and to generate the response body.
+        """
+        body = self.body(req)
+        context['content'] = body
+        template = req.site.buildbot_service.templates.get_template(
+            "empty.html")
+        return template.render(**context)
+
 
     def render(self, request):
         # tell the WebStatus about the HTTPChannel that got opened, so they

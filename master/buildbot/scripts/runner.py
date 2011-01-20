@@ -1,4 +1,18 @@
-# -*- test-case-name: buildbot.test.test_runner -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 # N.B.: don't import anything that might pull in a reactor yet. Some of our
 # subcommands want to load modules that need the gtk reactor.
@@ -7,10 +21,29 @@
 # pages and texinfo documentation.
 
 import os, sys, stat, re, time
-import traceback
 from twisted.python import usage, util, runtime
+from twisted.internet import defer
 
 from buildbot.interfaces import BuildbotNotRunningError
+
+def in_reactor(f):
+    """decorate a function by running it with maybeDeferred in a reactor"""
+    def wrap(*args, **kwargs):
+        from twisted.internet import reactor
+        result = [ ]
+        def async():
+            d = defer.maybeDeferred(f, *args, **kwargs)
+            def eb(f):
+                f.printTraceback()
+            d.addErrback(eb)
+            def do_stop(r):
+                result.append(r)
+                reactor.stop()
+            d.addBoth(do_stop)
+        reactor.callWhenRunning(async)
+        reactor.run()
+        return result[0]
+    return wrap
 
 def isBuildmasterDir(dir):
     buildbot_tac = os.path.join(dir, "buildbot.tac")
@@ -114,7 +147,7 @@ class MakerBase(OptionsWithOptionsFile):
         ["quiet", "q", "Do not emit the commands being run"],
         ]
 
-    longdesc = """
+    usage.Options.longdesc = """
     Operates upon the specified <basedir> (or the current directory, if not
     specified).
     """
@@ -282,16 +315,11 @@ class Maker:
             f.close()
 
     def create_db(self):
-        from buildbot.db import dbspec, exceptions
-        spec = dbspec.DBSpec.from_url(self.config["db"], self.basedir)
+        from buildbot.db import connector
+        db = connector.DBConnector(self.config['db'], basedir=self.basedir)
         if not self.config['quiet']: print "creating database"
-
-        # upgrade from "nothing"
-        from buildbot.db.schema import manager
-        sm = manager.DBSchemaManager(spec, self.basedir)
-        if sm.get_db_version() != 0:
-            raise exceptions.DBAlreadyExistsError
-        sm.upgrade()
+        d = db.model.upgrade()
+        return d
 
     def populate_if_missing(self, target, source, overwrite=False):
         new_contents = open(source, "rt").read()
@@ -339,6 +367,8 @@ class Maker:
                                  source)
 
     def check_master_cfg(self):
+        """Check the buildmaster configuration, returning a deferred that
+        fires with an approprate exit status (so 0=success)."""
         from buildbot.master import BuildMaster
         from twisted.python import log, failure
 
@@ -346,7 +376,7 @@ class Maker:
         if not os.path.exists(master_cfg):
             if not self.quiet:
                 print "No master.cfg found"
-            return 1
+            return defer.succeed(1)
 
         # side-effects of loading the config file:
 
@@ -375,7 +405,7 @@ class Maker:
             # the config file. Note that this BuildMaster instance is never
             # started, so it won't actually do anything with the
             # configuration.
-            m.loadConfig(open(master_cfg, "r"), check_synchronously_only=True)
+            return m.loadConfig(open(master_cfg, "r"), checkOnly=True)
         except:
             f = failure.Failure()
             if not self.quiet:
@@ -396,7 +426,6 @@ DB_HELP = """
     status information. The default (which creates an SQLite database in
     BASEDIR/state.sqlite) is equivalent to:
 
-      --db='DBSpec("sqlite3", basedir+"/state.sqlite"))'
       --db='sqlite:///state.sqlite'
 
     To use a remote MySQL database instead, use something like:
@@ -439,40 +468,47 @@ class UpgradeMasterOptions(MakerBase):
     pickle files.
     """
 
+@in_reactor
 def upgradeMaster(config):
-    basedir = os.path.expanduser(config['basedir'])
     m = Maker(config)
-    # TODO: check Makefile
-    # TODO: check TAC file
-    # check web files: index.html, default.css, robots.txt
-    m.upgrade_public_html({
-          'bg_gradient.jpg' : util.sibpath(__file__, "../status/web/files/bg_gradient.jpg"),
-          'default.css' : util.sibpath(__file__, "../status/web/files/default.css"),
-          'robots.txt' : util.sibpath(__file__, "../status/web/files/robots.txt"),
-          'favicon.ico' : util.sibpath(__file__, "../status/web/files/favicon.ico"),
-      })
-    m.populate_if_missing(os.path.join(basedir, "master.cfg.sample"),
-                          util.sibpath(__file__, "sample.cfg"),
-                          overwrite=True)
-    # if index.html exists, use it to override the root page tempalte
-    m.move_if_present(os.path.join(basedir, "public_html/index.html"),
-                      os.path.join(basedir, "templates/root.html"))
 
-    from buildbot.db import dbspec
-    spec = dbspec.DBSpec.from_url(config["db"], basedir)
-    # TODO: check that TAC file specifies the right spec
+    d = defer.succeed(None)
+    def upgradeBasedir(_):
+        if not config['quiet']: print "upgrading basedir"
+        basedir = os.path.expanduser(config['basedir'])
+        # TODO: check Makefile
+        # TODO: check TAC file
+        # check web files: index.html, default.css, robots.txt
+        m.upgrade_public_html({
+              'bg_gradient.jpg' : util.sibpath(__file__, "../status/web/files/bg_gradient.jpg"),
+              'default.css' : util.sibpath(__file__, "../status/web/files/default.css"),
+              'robots.txt' : util.sibpath(__file__, "../status/web/files/robots.txt"),
+              'favicon.ico' : util.sibpath(__file__, "../status/web/files/favicon.ico"),
+          })
+        m.populate_if_missing(os.path.join(basedir, "master.cfg.sample"),
+                              util.sibpath(__file__, "sample.cfg"),
+                              overwrite=True)
+        # if index.html exists, use it to override the root page tempalte
+        m.move_if_present(os.path.join(basedir, "public_html/index.html"),
+                          os.path.join(basedir, "templates/root.html"))
+    d.addCallback(upgradeBasedir)
 
-    # upgrade the db
-    from buildbot.db.schema import manager
-    sm = manager.DBSchemaManager(spec, basedir)
-    sm.upgrade()
+    def upgradeDB(_):
+        from buildbot.db import connector
+        db = connector.DBConnector(config['db'], basedir=config['basedir'])
+        if not config['quiet']: print "upgrading database"
+        return db.model.upgrade()
+    d.addCallback(upgradeDB)
 
-    # check the configuration
-    rc = m.check_master_cfg()
-    if rc:
-        return rc
-    if not config['quiet']: print "upgrade complete"
-    return 0
+    def checkMaster(_):
+        # check the configuration
+        rc = m.check_master_cfg()
+        if rc:
+            return rc
+        if not config['quiet']: print "upgrade complete"
+        return 0
+    d.addCallback(checkMaster)
+    return d
 
 
 class MasterOptions(MakerBase):
@@ -565,6 +601,7 @@ m.log_rotation.maxRotatedFiles = maxRotatedFiles
 
 """]
 
+@in_reactor
 def createMaster(config):
     m = Maker(config)
     m.mkdir()
@@ -585,9 +622,13 @@ def createMaster(config):
           'favicon.ico' : util.sibpath(__file__, "../status/web/files/favicon.ico"),
       })
     m.makefile()
-    m.create_db()
+    d = m.create_db()
 
-    if not m.quiet: print "buildmaster configured in %s" % m.basedir
+    def print_status(r):
+        if not m.quiet:
+            print "buildmaster configured in %s" % m.basedir
+    d.addCallback(print_status)
+    return d
 
 def stop(config, signame="TERM", wait=False):
     import signal
@@ -760,7 +801,9 @@ def statusgui(config):
     if master is None:
         raise usage.UsageError("master must be specified: on the command "
                                "line or in ~/.buildbot/options")
-    c = gtkPanes.GtkClient(master)
+    passwd = config.get('passwd')
+    username = config.get('username')
+    c = gtkPanes.GtkClient(master, username=username, passwd=passwd)
     c.run()
 
 class SendChangeOptions(OptionsWithOptionsFile):
@@ -771,7 +814,10 @@ class SendChangeOptions(OptionsWithOptionsFile):
     optParameters = [
         ("master", "m", None,
          "Location of the buildmaster's PBListener (host:port)"),
-        ("username", "u", None, "Username performing the commit"),
+        # deprecated in 0.8.3; remove in 0.8.5 (bug #1711)
+        ("username", "u", None, "deprecated name for --who"),
+        ("auth", "a", None, "Authentication token - username:password, or prompt for password"),
+        ("who", "W", None, "Author of the commit"),
         ("repository", "R", '', "Repository specifier"),
         ("project", "P", '', "Project specifier"),
         ("branch", "b", None, "Branch specifier"),
@@ -789,6 +835,7 @@ class SendChangeOptions(OptionsWithOptionsFile):
 
     buildbotOptions = [
         [ 'master', 'master' ],
+        [ 'who', 'who' ],
         [ 'username', 'username' ],
         [ 'branch', 'branch' ],
         [ 'category', 'category' ],
@@ -808,7 +855,11 @@ def sendchange(config, runReactor=False):
     connection will be drpoped as soon as the Change has been sent."""
     from buildbot.clients.sendchange import Sender
 
-    user = config.get('username')
+    who = config.get('who')
+    if not who and config.get('username'):
+        print "NOTE: --username/-u is deprecated: use --who/-W'"
+        who = config.get('username')
+    auth = config.get('auth')
     master = config.get('master')
     branch = config.get('branch')
     category = config.get('category')
@@ -836,11 +887,20 @@ def sendchange(config, runReactor=False):
 
     files = config.get('files', [])
 
-    assert user, "you must provide a username"
+    # fix up the auth with a password if none was given
+    if not auth:
+        auth = 'change:changepw'
+    if ':' not in auth:
+        import getpass
+        pw = getpass.getpass("Enter password for '%s': " % auth)
+        auth = "%s:%s" % (auth, pw)
+    auth = auth.split(':', 1)
+
+    assert who, "you must provide a committer (--who)"
     assert master, "you must provide the master location"
 
-    s = Sender(master, user)
-    d = s.send(branch, revision, comments, files, category=category, when=when,
+    s = Sender(master, auth)
+    d = s.send(branch, revision, comments, files, who=who, category=category, when=when,
                properties=properties, repository=repository, project=project,
                revlink=revlink)
     if runReactor:
@@ -1029,25 +1089,30 @@ class CheckConfigOptions(OptionsWithOptionsFile):
             self['configFile'] = 'master.cfg'
 
 
+@in_reactor
 def doCheckConfig(config):
+    from buildbot.scripts.checkconfig import ConfigLoader
     quiet = config.get('quiet')
     configFileName = config.get('configFile')
-    try:
-        from buildbot.scripts.checkconfig import ConfigLoader
-        if os.path.isdir(configFileName):
-            ConfigLoader(basedir=configFileName)
-        else:
-            ConfigLoader(configFileName=configFileName)
-    except:
+
+    if os.path.isdir(configFileName):
+        cl = ConfigLoader(basedir=configFileName)
+    else:
+        cl = ConfigLoader(configFileName=configFileName)
+
+    d = cl.load()
+
+    def cb(r):
         if not quiet:
-            # Print out the traceback in a nice format
-            t, v, tb = sys.exc_info()
-            traceback.print_exception(t, v, tb)
-        sys.exit(1)
+            print "Config file is good!"
+        return True
+    def eb(f):
+        if not quiet:
+            f.printTraceback()
+        return False
+    d.addCallbacks(cb, eb)
 
-    if not quiet:
-        print "Config file is good!"
-
+    return d
 
 class Options(usage.Options):
     synopsis = "Usage:    buildbot <command> [command options]"
@@ -1158,6 +1223,7 @@ def run():
     elif command == "tryserver":
         doTryServer(so)
     elif command == "checkconfig":
-        doCheckConfig(so)
+        if not doCheckConfig(so):
+            sys.exit(1)
     sys.exit(0)
 

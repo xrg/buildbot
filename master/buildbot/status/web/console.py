@@ -1,3 +1,18 @@
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 from __future__ import generators
 
 import time
@@ -349,11 +364,8 @@ class ConsoleStatusResource(HtmlResource):
         
         for category in categories:            
             c = {}
-            # TODO(nsylvain): Another hack to display the category in a pretty
-            # way.  If the master owner wants to display the categories in a
-            # given order, he/she can prepend a number to it. This number won't
-            # be shown.
-            c["name"] = category.lstrip('0123456789')
+
+            c["name"] = category
 
             # To be able to align the table correctly, we need to know
             # what percentage of space this category will be taking. This is
@@ -704,7 +716,7 @@ class IntegerRevisionComparator(RevisionComparator):
     def isRevisionEarlier(self, first, second):
         try:
             return int(first.revision) < int(second.revision)
-        except TypeError:
+        except (TypeError, ValueError):
             return False
 
     def isValidRevision(self, revision):

@@ -43,6 +43,7 @@ methods. See the docstrings in @file{buildbot/interfaces.py} for full details.
 * PBListener::
 * StatusPush::
 * HttpStatusPush::
+* GerritStatusPush::
 * Writing New Status Plugins::
 * Status Target Index::
 @end menu
@@ -265,8 +266,10 @@ given categories.
 By adding one or more ``name='' query arguments to the URL, the console view is
 restricted to only showing changes made by the given users.
 
-NOTE: To use this page, your buildbot.css file in public_html
-must be the one found in buildbot/status/web/extended.css.
+NOTE: To use this page, your buildbot.css file in public_html must be the one
+found in @file{master/buildbot/status/web/files/default.css}.  This is the
+default for new installs, but upgrades of very old installs of Buildbot may
+need to manually fix the CSS file.
 
 The console view is still in development. At this moment by default the view
 sorts revisions lexically, which can lead to odd behavior with non-integer
@@ -644,7 +647,7 @@ An example WebStatus configuration line which enables change_hook and two DIALEC
 c['status'].append(html.WebStatus(http_port=8010,allowForce=True,
                         change_hook_dialects=@{
                                 'base': True,
-                                'github': @{'option1':True,
+                                'somehook': @{'option1':True,
                                             'option2':False@}@}))
 @end example
 
@@ -652,9 +655,25 @@ Within the WebStatus arguments, the @code{change_hook} key enables/disables the 
 and @code{change_hook_dialects} whitelists DIALECTs where the keys are the module names
 and the values are optional arguments which will be passed to the hooks.
 
-The post_build_request.py script in master/contrib allows for the submission of an
-arbitrary change request. Run 'post_build_request.py --help' for more information.
-The 'base' dialect must be enabled for this to work.
+The @file{post_build_request.py} script in @file{master/contrib} allows for the
+submission of an arbitrary change request. Run @code{post_build_request.py
+--help} for more information.  The 'base' dialect must be enabled for this to
+work.
+
+@heading github hook
+
+The github hook is simple and takes no options.  
+
+@example
+c['status'].append(html.WebStatus(..
+                    change_hook_dialects=@{ 'github' : True @}))
+@end example
+
+With this set up, add a Post-Receive URL for the project in the Github
+administrative interface, pointing to @code{/change_hook/github} relative to
+the root of the web status.  For example, if the grid URL is
+@code{http://builds.mycompany.com/bbot/grid}, then point Github to
+@code{http://builds.mycompany.com/bbot/change_hook/github}.
 
 @node MailNotifier
 @subsection MailNotifier
@@ -1203,6 +1222,37 @@ c['status'].append(sp)
 HttpStatusPush builds on StatusPush and sends HTTP requests to
 serverUrl, with all the items json-encoded. It is useful to create a
 status front end outside of buildbot for better scalability.
+
+@node GerritStatusPush
+@subsection GerritStatusPush
+
+@cindex GerritStatusPush
+@stindex buildbot.status.status_gerrit.GerritStatusPush
+
+
+@example
+from buildbot.status.status_gerrit import GerritStatusPush
+
+def gerritReviewCB(builderName, build, result, arg):
+    message =  "Buildbot finished compiling your patchset\n"
+    message += "on configuration: %s\n" % builderName
+    message += "The result is: %s\n" % Results[result].upper()
+
+    if arg:
+        message += "\nFor more details visit:\n"
+        message += "%sbuilders/%s/builds/%d\n" % (arg, builderName, build.getNumber())
+
+    # message, verified, reviewed
+    return message, (result == 0 or -1), 0
+
+c['buildbotURL'] = 'http://buildbot.example.com/'
+c['status'].append(GerritStatusPush('127.0.0.1', 'buildbot',
+                                    reviewCB=gerritReviewCB,
+                                    reviewArg=c['buildbotURL']))
+@end example
+
+GerritStatusPush sends review of the Change back to the Gerrit server.
+
 
 @node Writing New Status Plugins
 @subsection Writing New Status Plugins

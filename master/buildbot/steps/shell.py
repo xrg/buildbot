@@ -1,4 +1,18 @@
-# -*- test-case-name: buildbot.test.test_steps,buildbot.test.test_properties -*-
+# This file is part of Buildbot.  Buildbot is free software: you can
+# redistribute it and/or modify it under the terms of the GNU General Public
+# License as published by the Free Software Foundation, version 2.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51
+# Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Copyright Buildbot Team Members
+
 
 import re
 from twisted.python import log
@@ -136,6 +150,11 @@ class ShellCommand(LoggingBuildStep):
                 return properties.render(self.descriptionDone)
             if self.description is not None:
                 return properties.render(self.description)
+
+            # we may have no command if this is a step that sets its command
+            # name late in the game (e.g., in start())
+            if not self.command:
+                return ["???"]
 
             words = self.command
             if isinstance(words, (str, unicode)):

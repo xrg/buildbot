@@ -29,7 +29,8 @@ control each.
 * Python BuildSteps::
 * Transferring Files::
 * Transferring Strings::
-* Steps That Run on the Master::
+* Running Commands on the Master::
+* Setting Properties::
 * Triggering Schedulers::
 * Miscellaneous BuildSteps::
 * Writing New BuildSteps::
@@ -207,6 +208,26 @@ substitute an empty string.
 Although these are similar to shell substitutions, no other
 substitutions are currently supported, and @code{replacement} in the
 above cannot contain more substitutions.
+
+If you need to do more complex substitution, you can pass keyword
+arguments to @code{WithProperties}. The value of each keyword argument
+should be a function that takes one argument (the existing properties)
+and returns a string value that will be used to replace that key:
+
+@example
+WithProperties('%(now)s', now=lambda _: time.clock())
+@end example
+
+@example
+def determine_foo(props):
+    if props.has_key('bar'):
+        return props['bar']
+    elif props.has_key('baz'):
+        return props['baz']
+    return 'qux'
+
+WithProperties('%(foo)s', foo=determine_foo)
+@end example
 
 Note: like python, you can either do positional-argument interpolation
 @emph{or} keyword-argument interpolation, not both. Thus you cannot use
@@ -406,6 +427,12 @@ The callable given as parameter will take the repository property from
 the Change and its return value will be used as repository URL.
 
 @end table
+
+@item timeout
+Specifies the timeout for slave-side operations, in seconds.  If your
+repositories are particularly large, then you may need to increase this 
+value from its default of 1200 (20 minutes).
+
 @end table
 
 Use of WithProperites with string, dict and callable is supported.
@@ -445,6 +472,7 @@ arguments are described on the following pages.
 * P4::
 * Git::
 * BitKeeper::
+* Repo::
 @end menu
 
 @node CVS
@@ -906,6 +934,13 @@ Git 1.7.2 or later.
 
 @end table
 
+This Source step integrates with @ref{GerritChangeSource}, and will automatically use
+Gerrit's "virtual branch" (@code{refs/changes/*}) to download the additionnal changes
+introduced by a pending changeset.
+
+Gerrit integration can be also triggered using forced build with @code{gerrit_change}
+property with value in format: @code{change_number/patchset_number}.
+
 
 @node BitKeeper
 @subsubsection BitKeeper
@@ -929,6 +964,46 @@ to which a branch name will be appended. It should probably end in a
 slash.
 
 @end table
+
+@node Repo
+@subsubsection Repo
+@cindex Repo init sync
+@bsindex buildbot.steps.source.Repo
+
+The @code{Repo} build step performs a @uref{http://lwn.net/Articles/304488/, Repo}
+init and sync.
+
+The Repo step takes the following arguments:
+
+@table @code
+@item manifest_url
+(required): the URL at which the Repo's manifests source repository is available.
+
+@item manifest_branch
+(optional, defaults to @code{master}): the manifest repository branch on which
+repo will take its manifest. Corresponds to the @code{-b} argument to the @code{repo init} command.
+@item manifest_file
+(optional, defaults to @code{default.xml}): the manifest filename.
+Corresponds to the @code{-m} argument to the @code{repo init} command.
+@item tarball
+(optional, defaults to @code{None}): the repo tarball used for fast bootstrap.
+If not present the tarball will be created automatically after first sync.
+It is a copy of the @code{.repo} directory which contains all the git objects.
+This feature helps to minimize network usage on very big projects.
+@end table
+
+This Source step integrates with @ref{GerritChangeSource}, and will automatically use the
+@code{repo download} command of repo to download the additionnal changes introduced by a
+pending changeset.
+
+Gerrit integration can be also triggered using forced build with following properties:
+@code{repo_d}, @code{repo_d[0-9]}, @code{repo_download}, @code{repo_download[0-9]}
+with values in format: @code{project/change_number/patchset_number}.
+All of these properties will be translated into a @code{repo download}.
+This feature allows integrators to build with several pending interdependent changes,
+which at the moment cannot be described properly in Gerrit, and can only be described
+by humans.
+
 
 @node ShellCommand
 @subsection ShellCommand
@@ -1515,6 +1590,8 @@ f.addStep(SetProperty(
 Then @code{my_extract} will see @code{stdout="output1\noutput2\n"}
 and @code{stderr="error\n"}.
 
+See also @ref{Setting Properties}.
+
 @node SubunitShellCommand
 @subsubsection SubunitShellCommand
 
@@ -1832,9 +1909,10 @@ Sometimes it is useful to transfer a calculated value from the master
 to the slave.  Instead of having to create a temporary file and then
 use @code{FileDownload}, you can use one of the string download steps.
 
-@code{StringDownload} works just like @code{FileDownload} except it
-takes a single argument, @code{s}, representing the string to download
-instead of a @code{mastersrc} argument.
+@code{StringDownload} works just like @code{FileDownload} except it takes a
+single argument, @code{s}, representing the string to download instead of a
+@code{mastersrc} argument.  @code{WithProperties} will be properly rendered, if
+used in this argument.
 
 @code{JSONStringDownload} is similar, except it takes an @code{o}
 argument, which must be json serializable, and transfers that as a
@@ -1845,8 +1923,9 @@ represents a dictionary where @code{properties} maps to a dictionary
 of build property name to property value; and @code{sourcestamp}
 represents the build's sourcestamp.
 
-@node Steps That Run on the Master
-@subsection Steps That Run on the Master
+@node Running Commands on the Master
+@subsection Running Commands on the Master
+
 @bsindex buildbot.steps.master.MasterShellCommand
 
 Occasionally, it is useful to execute some task on the master, for example to
@@ -1875,6 +1954,32 @@ f.addStep(MasterShellCommand(command="""
 Note that, by default, this step passes a copy of the buildmaster's environment
 variables to the subprocess.  To pass an explicit environment instead, add an
 @code{env=@{..@}} argument.
+
+@node Setting Properties
+@subsection Setting Properties
+
+@bsindex buildbot.steps.slave.SetPropertiesFromEnv
+
+In Buildbot-0.8.3 and higher, slaves provide their environment variables to the
+master on connect.  These can be copied into Buildbot properties with the
+@code{SetPropertiesFromEnv} step.  Pass a variable or list of variables in the
+@code{variables} parameter, then simply use the values as properties in a later
+step.
+
+@example
+from buildbot.steps.slave import SetProperiesFromEnv
+from buildbot.steps.shell import Compile
+
+f.addStep(SetPropertiesFromEnv(variables=["SOME_JAVA_LIB_HOME", "JAVAC"]))
+f.addStep(Compile(commands=[WithProperties("%s","JAVAC"), "-cp", WithProperties("%s", "SOME_JAVA_LIB_HOME")))
+@end example
+
+Note that this step requires that the Buildslave be at least version 0.8.3.
+For previous versions, no environment variables are available (the slave
+environment will appear to be empty).
+
+See also @ref{SetProperty}, which runs a command on the slave and sets a
+property based on the result.
 
 @node Triggering Schedulers
 @subsection Triggering Schedulers
