@@ -52,7 +52,6 @@ Bazaar VC
 Git VC
     S: Maintained
     M: Amber Yust <ayust@yelp.com> - Hacker
-    M: James Tomson <jtomson@wimba.com> - Hacker
     U: http://trac.buildbot.net/wiki/git
 
 BitKeeper VC
@@ -93,6 +92,9 @@ Debug Client
 Status Client
     S: Patched
     M: Mark Wielaard <mark@klomp.org>
+
+Debug Client
+    S: Orphaned
 
 Web Status
     S: Supported

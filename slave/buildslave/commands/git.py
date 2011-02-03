@@ -84,9 +84,7 @@ class Git(SourceBaseCommand):
     # in doVCUpdate.
     def sourcedataMatches(self):
         try:
-            olddata = self.readSourcedata()
-            if not olddata.startswith(self.repourl+' '):
-                return False
+            self.readSourcedata()
         except IOError:
             return False
         return True
