@@ -829,3 +829,6 @@ class DBConnector(object):
 
 
 threadable.synchronize(DBConnector)
+
+# alias for the class, can be overriden
+db_connector = DBConnector

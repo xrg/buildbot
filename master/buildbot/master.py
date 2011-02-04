@@ -1051,7 +1051,7 @@ class BuildMaster(service.MultiService):
         if self.db:
             return
 
-        self.db = connector.DBConnector(db_url, self.basedir)
+        self.db = connector.db_connector(db_url, self.basedir)
         if self.changeCacheSize:
             self.db.setChangeCacheSize(self.changeCacheSize)
         self.db.start()
