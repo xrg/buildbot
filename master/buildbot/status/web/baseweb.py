@@ -438,7 +438,7 @@ class WebStatus(service.MultiService):
         status = self.getStatus()
         root.putChild("rss", Rss20StatusResource(status))
         root.putChild("atom", Atom10StatusResource(status))
-        root.putChild("json", JsonStatusResource(status))
+        # root.putChild("json", JsonStatusResource(status))
 
         self.site.resource = root
 
