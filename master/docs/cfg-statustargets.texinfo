@@ -545,8 +545,8 @@ authz = Authz(auth=BasicAuth(users),
 
 The @code{forceBuild} and @code{pingBuilder} actions both supply a
 BuilderStatus object.  The @code{stopBuild} action supplies a BuildStatus
-object.  The @code{cancelPendingBuild} action supplies a BuildRequest.  The
-remainder do not supply any extra arguments.
+object.  The @code{cancelPendingBuild} action supplies a @code{BuildRequest}.
+The remainder do not supply any extra arguments.
 
 @heading Logging configuration
 
@@ -675,6 +675,10 @@ the root of the web status.  For example, if the grid URL is
 @code{http://builds.mycompany.com/bbot/grid}, then point Github to
 @code{http://builds.mycompany.com/bbot/change_hook/github}.
 
+Note that there is a standalone HTTP server available for receiving github
+notifications, as well: @code{contrib/github_buildbot.py}.  This script may be
+useful in cases where you cannot expose the WebStatus for public consumption.
+
 @node MailNotifier
 @subsection MailNotifier
 
@@ -751,6 +755,10 @@ mn = MailNotifier(fromaddr="myuser@@gmail.com",
                   useTls=True, relayhost="smtp.gmail.com", smtpPort=587,
                   smtpUser="myuser@@gmail.com", smtpPassword="mypassword")
 @end example
+
+Note that if you see @code{twisted.mail.smtp.TLSRequiredError} exceptions in
+the log while using TLS, this can be due @i{either} to the server not
+supporting TLS or to a missing pyopenssl package on the buildmaster system.
 
 In some cases it is desirable to have different information then what is
 provided in a standard MailNotifier message. For this purpose MailNotifier

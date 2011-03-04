@@ -25,9 +25,18 @@ class OldImportPaths(unittest.TestCase):
         from buildbot.scheduler import Scheduler
         assert Scheduler
 
+    def test_schedulers_basic_Scheduler(self):
+        # renamed to basic.SingleBranchScheduler
+        from buildbot.schedulers.basic import Scheduler
+        assert Scheduler
+
     def test_scheduler_AnyBranchScheduler(self):
         from buildbot.scheduler import AnyBranchScheduler
         assert AnyBranchScheduler
+
+    def test_scheduler_basic_Dependent(self):
+        from buildbot.schedulers.basic import Dependent
+        assert Dependent
 
     def test_scheduler_Dependent(self):
         from buildbot.scheduler import Dependent
@@ -71,3 +80,18 @@ class OldImportPaths(unittest.TestCase):
         # this was the location of ChangeFilter until 0.8.4
         from buildbot.schedulers.filter import ChangeFilter
         assert ChangeFilter
+
+    def test_process_base_Build(self):
+        from buildbot.process.base import Build
+        assert Build
+
+    def test_buildrequest_BuildRequest(self):
+        from buildbot.buildrequest import BuildRequest
+        assert BuildRequest
+
+    def test_sourcestamp_SourceStamp(self):
+        # this must exist, and the class must be defined at this package path,
+        # in order for old build pickles to be loaded.
+        from buildbot.sourcestamp import SourceStamp
+        assert SourceStamp
+

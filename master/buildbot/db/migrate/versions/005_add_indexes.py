@@ -20,7 +20,8 @@ def upgrade(migrate_engine):
     metadata.bind = migrate_engine
 
     # note that all of the tables defined here omit the ForeignKey constraints;
-    # this just lets this code define the tables in any order; the key
+    # this just lets this code specify the tables in any order; the tables are
+    # not re-created here, so this omission causes no problems - the key
     # constraints are still defined in the table
 
     def add_index(table_name, col_name):
@@ -32,10 +33,10 @@ def upgrade(migrate_engine):
         sa.Column('id', sa.Integer,  primary_key=True),
         sa.Column('buildsetid', sa.Integer, nullable=False),
         sa.Column('buildername', sa.String(length=None), nullable=False),
-        sa.Column('priority', sa.Integer, nullable=False, server_default=sa.DefaultClause("NULL")),
+        sa.Column('priority', sa.Integer, nullable=False),
         sa.Column('claimed_at', sa.Integer, server_default=sa.DefaultClause("0")),
-        sa.Column('claimed_by_name', sa.String(length=None), server_default=sa.DefaultClause("NULL")),
-        sa.Column('claimed_by_incarnation', sa.String(length=None), server_default=sa.DefaultClause("NULL")),
+        sa.Column('claimed_by_name', sa.String(length=None)),
+        sa.Column('claimed_by_incarnation', sa.String(length=None)),
         sa.Column('complete', sa.Integer, server_default=sa.DefaultClause("0")),
         sa.Column('results', sa.SmallInteger),
         sa.Column('submitted_at', sa.Integer, nullable=False),

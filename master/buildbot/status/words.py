@@ -463,17 +463,14 @@ class Contact(base.StatusReceiver):
 
         bc = self.getControl(which)
 
-        # TODO: maybe give certain users the ability to request builds of
-        # certain branches
         reason = "forced: by %s: %s" % (self.describeUser(who), reason)
         ss = SourceStamp(branch=branch, revision=revision)
-        try:
-            brs = bc.submitBuildRequest(ss, reason, now=True)
-        except interfaces.NoSlaveError:
-            self.send("sorry, I can't force a build: all slaves are offline")
-            return
-        ireq = IrcBuildRequest(self)
-        brs.subscribe(ireq.started)
+        d = bc.submitBuildRequest(ss, reason)
+        def subscribe(buildreq):
+            ireq = IrcBuildRequest(self)
+            buildreq.subscribe(ireq.started)
+        d.addCallback(subscribe)
+        d.addErrback(log.err, "while forcing a build")
 
 
     command_FORCE.usage = "force build <which> <reason> - Force a build"
@@ -740,6 +737,7 @@ class IrcStatusBot(irc.IRCClient):
         self.channels = channels
         self.password = password
         self.status = status
+        self.master = status.master
         self.categories = categories
         self.notify_events = notify_events
         self.counter = 0

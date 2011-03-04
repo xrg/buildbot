@@ -21,9 +21,15 @@ import sqlalchemy as sa
 #import migrate
 #import migrate.versioning.schema
 #import migrate.versioning.repository
-#import migrate.versioning.exceptions
 from twisted.python import util, log
 from buildbot.db import base
+
+try:
+    from migrate.versioning import exceptions
+    _hush_pyflakes = exceptions
+except ImportError:
+    #from migrate import exceptions
+    pass
 
 class Model(base.DBConnectorComponent):
     """
@@ -45,9 +51,13 @@ class Model(base.DBConnectorComponent):
     metadata = sa.MetaData()
 
     # NOTES
+
+    # * server_defaults here are included to match those added by the migration
+    #   scripts, but they should not be depended on - all code accessing these
+    #   tables should supply default values as necessary.  The defaults are
+    #   required during migration when adding non-nullable columns to existing
+    #   tables.
     #
-    # * always use default=sa.DefaultClause(..) instead of default=.., so that we can add
-    #   non-null columns with a server-side default value.
     # * dates are stored as unix timestamps (UTC-ish epoch time)
 
     # build requests
@@ -230,13 +240,13 @@ class Model(base.DBConnectorComponent):
 
         # the branch to check out.  When branch is NULL, that means
         # the main branch (trunk, master, etc.)
-        sa.Column('branch', sa.String(256), server_default=sa.DefaultClause("NULL")),
+        sa.Column('branch', sa.String(256)),
 
         # the revision to check out, or the latest if NULL
-        sa.Column('revision', sa.String(256), server_default=sa.DefaultClause("NULL")),
+        sa.Column('revision', sa.String(256)),
 
         # the patch to apply to generate this source code
-        sa.Column('patchid', sa.Integer, sa.ForeignKey('patches.id'), server_default=sa.DefaultClause("NULL")),
+        sa.Column('patchid', sa.Integer, sa.ForeignKey('patches.id')),
 
         # the repository from which this source should be checked out
         sa.Column('repository', sa.Text(length=None), nullable=False, server_default=''),
@@ -289,6 +299,35 @@ class Model(base.DBConnectorComponent):
     Note that schedulers are never deleted."""
     # TODO: delete records eventually
 
+    objects = sa.Table("objects", metadata,
+        # unique ID for this object
+        sa.Column("id", sa.Integer, primary_key=True),
+        # object's user-given name
+        sa.Column('name', sa.String(128), nullable=False),
+        # object's class name, basically representing a "type" for the state
+        sa.Column('class_name', sa.String(128), nullable=False),
+
+        # prohibit multiple id's for the same object
+        sa.UniqueConstraint('name', 'class_name', name='object_identity'),
+    )
+    """This table uniquely identifies objects that need to maintain state
+    across invocations."""
+
+    object_state = sa.Table("object_state", metadata,
+        # object for which this value is set
+        sa.Column("objectid", sa.Integer, sa.ForeignKey('objects.id'),
+                              nullable=False),
+        # name for this value (local to the object)
+        sa.Column("name", sa.String(length=None), nullable=False),
+        # value, as a JSON string
+        sa.Column("value_json", sa.Text, nullable=False),
+
+        # prohibit multiple values for the same object and name
+        sa.UniqueConstraint('objectid', 'name', name='name_per_object'),
+    )
+    """This table stores key/value pairs for objects, where the key is a string
+    and the value is a JSON string."""
+
     # indexes
 
     sa.Index('name_and_class', schedulers.c.name, schedulers.c.class_name)
@@ -312,6 +351,8 @@ class Model(base.DBConnectorComponent):
     sa.Index('change_properties_changeid', change_properties.c.changeid)
     sa.Index('scheduler_changes_schedulerid', scheduler_changes.c.schedulerid)
     sa.Index('scheduler_changes_changeid', scheduler_changes.c.changeid)
+    sa.Index('scheduler_changes_unique', scheduler_changes.c.schedulerid,
+                    scheduler_changes.c.changeid, unique=True)
     sa.Index('scheduler_upstream_buildsets_buildsetid', scheduler_upstream_buildsets.c.buildsetid)
     sa.Index('scheduler_upstream_buildsets_schedulerid', scheduler_upstream_buildsets.c.schedulerid)
     sa.Index('scheduler_upstream_buildsets_active', scheduler_upstream_buildsets.c.active)
@@ -341,7 +382,7 @@ class Model(base.DBConnectorComponent):
                 # migrate.api doesn't let us hand in an engine
                 schema = migrate.versioning.schema.ControlledSchema(engine, self.repo_path)
                 db_version = schema.version
-            except migrate.versioning.exceptions.DatabaseNotControlledError:
+            except exceptions.DatabaseNotControlledError:
                 return False
 
             return db_version == repo_version

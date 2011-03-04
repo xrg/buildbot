@@ -18,7 +18,7 @@ from twisted.trial import unittest
 from buildbot.steps.shell import ShellCommand, SetProperty
 from buildbot.process.properties import WithProperties, Properties
 from buildbot.process.factory import BuildFactory
-from buildbot.buildrequest import BuildRequest
+from buildbot.process.buildrequest import BuildRequest
 from buildbot.sourcestamp import SourceStamp
 
 class FakeSlaveBuilder:

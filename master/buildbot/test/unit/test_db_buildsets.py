@@ -18,38 +18,32 @@ from twisted.trial import unittest
 from twisted.internet import defer
 from buildbot.db import buildsets
 from buildbot.util import json
-from buildbot.test.util import db, connector_component
-from buildbot.process import properties
+from buildbot.test.util import connector_component
+from buildbot.test.fake import fakedb
 
 class TestBuildsetsConnectorComponent(
             connector_component.ConnectorComponentMixin,
-            db.RealDatabaseMixin,
             unittest.TestCase):
 
     def setUp(self):
-        self.setUpRealDatabase()
-        self.setUpConnectorComponent(self.db_url)
+        d = self.setUpConnectorComponent(
+            table_names=[ 'patches', 'changes', 'sourcestamp_changes',
+                'buildsets', 'buildset_properties', 'schedulers',
+                'buildrequests', 'scheduler_upstream_buildsets',
+                'sourcestamps' ])
 
-        # add the .sourcestamps attribute
-        self.db.buildsets = buildsets.BuildsetsConnectorComponent(self.db)
+        def finish_setup(_):
+            self.db.buildsets = buildsets.BuildsetsConnectorComponent(self.db)
+        d.addCallback(finish_setup)
 
-        # set up the tables we'll need, following links where ForeignKey
-        # constraints are in place.
-        def thd(engine):
-            self.db.model.buildsets.create(bind=engine)
-            self.db.model.buildset_properties.create(bind=engine)
-            self.db.model.scheduler_upstream_buildsets.create(bind=engine)
-            self.db.model.buildrequests.create(bind=engine)
-            self.db.model.sourcestamps.create(bind=engine)
+        # set up a sourcestamp with id 234 for use below
+        d.addCallback(lambda _ :
+            self.insertTestData([ fakedb.SourceStamp(id=234) ]))
 
-            # set up a sourcestamp with id 234 for referential integrity
-            engine.execute(self.db.model.sourcestamps.insert(), dict(id=234))
-
-        return self.db.pool.do_with_engine(thd)
+        return d
 
     def tearDown(self):
-        self.tearDownConnectorComponent()
-        self.tearDownRealDatabase()
+        return self.tearDownConnectorComponent()
 
     # tests
 
@@ -87,8 +81,7 @@ class TestBuildsetsConnectorComponent(
         return d
 
     def test_addBuildset_bigger(self):
-        props = properties.Properties()
-        props.setProperty('prop', [ 'list' ], 'test')
+        props = dict(prop=(['list'], 'test'))
         d = defer.succeed(None)
         d.addCallback(lambda _ :
             self.db.buildsets.addBuildset(ssid=234, reason='because',
@@ -123,13 +116,27 @@ class TestBuildsetsConnectorComponent(
 
     def test_subscribeToBuildset(self):
         tbl = self.db.model.scheduler_upstream_buildsets
-        d = self.db.buildsets.subscribeToBuildset(schedulerid=13, buildsetid=14)
+        def add_data_thd(conn):
+            conn.execute(self.db.model.schedulers.insert(), [
+                    dict(schedulerid=13, name='other', state='', class_name='sch'),
+                ])
+            conn.execute(self.db.model.sourcestamps.insert(), [
+                    dict(id=120, branch='b', revision='120',
+                         repository='', project=''),
+                ])
+            conn.execute(self.db.model.buildsets.insert(), [
+                    dict(id=14, sourcestampid=120, complete=0,
+                         results=-1, submitted_at=0),
+                ])
+        d = self.db.pool.do(add_data_thd)
+        d.addCallback(lambda _ :
+                self.db.buildsets.subscribeToBuildset(schedulerid=13, buildsetid=14))
         def check(_):
             def thd(conn):
                 r = conn.execute(tbl.select())
-                rows = [ (row.schedulerid, row.buildsetid)
+                rows = [ (row.schedulerid, row.buildsetid, row.active)
                           for row in r.fetchall() ]
-                self.assertEqual(rows, [ (13, 14) ])
+                self.assertEqual(rows, [ (13, 14, 1) ])
             return self.db.pool.do(thd)
         d.addCallback(check)
         return d
@@ -137,10 +144,23 @@ class TestBuildsetsConnectorComponent(
     def test_unsubscribeFromBuildset(self):
         tbl = self.db.model.scheduler_upstream_buildsets
         def add_data_thd(conn):
+            conn.execute(self.db.model.sourcestamps.insert(), [
+                    dict(id=120, branch='b', revision='120',
+                         repository='', project=''),
+                ])
+            conn.execute(self.db.model.buildsets.insert(), [
+                    dict(id=13, sourcestampid=120, complete=0,
+                         results=-1, submitted_at=0),
+                    dict(id=14, sourcestampid=120, complete=0,
+                         results=-1, submitted_at=0),
+                ])
+            conn.execute(self.db.model.schedulers.insert(), [
+                    dict(schedulerid=92, name='sc', state='', class_name='sch'),
+                ])
             conn.execute(tbl.insert(), [
-                         dict(schedulerid=92, buildsetid=13, complete=0),
-                         dict(schedulerid=92, buildsetid=14, complete=1),
-                         ])
+                    dict(schedulerid=92, buildsetid=13, complete=0),
+                    dict(schedulerid=92, buildsetid=14, complete=1),
+                ])
         d = self.db.pool.do(add_data_thd)
         d.addCallback(
             lambda _ : self.db.buildsets.unsubscribeFromBuildset(
@@ -158,6 +178,18 @@ class TestBuildsetsConnectorComponent(
     def test_getSubscribedBuildsets(self):
         tbl = self.db.model.scheduler_upstream_buildsets
         def add_data_thd(conn):
+            conn.execute(self.db.model.schedulers.insert(), [
+                    dict(schedulerid=92, name='sc', state='', class_name='sch'),
+                    dict(schedulerid=93, name='other', state='', class_name='sch'),
+                ])
+            conn.execute(self.db.model.sourcestamps.insert(), [
+                    dict(id=120, branch='b', revision='120',
+                         repository='', project=''),
+                    dict(id=130, branch='b', revision='130',
+                         repository='', project=''),
+                    dict(id=140, branch='b', revision='140',
+                         repository='', project=''),
+                ])
             conn.execute(self.db.model.buildsets.insert(), [
                     dict(id=12, sourcestampid=120, complete=0,
                          results=-1, submitted_at=0),
@@ -165,6 +197,8 @@ class TestBuildsetsConnectorComponent(
                          results=-1, submitted_at=0),
                     dict(id=14, sourcestampid=140, complete=1,
                          results=5, submitted_at=0),
+                    dict(id=15, sourcestampid=120, complete=0,
+                         results=-1, submitted_at=0),
                 ])
             conn.execute(tbl.insert(), [
                     dict(schedulerid=92, buildsetid=12, active=1),
@@ -178,8 +212,8 @@ class TestBuildsetsConnectorComponent(
                     dict(schedulerid=93, buildsetid=14, active=1),
                 ])
         d = self.db.pool.do(add_data_thd)
-        d.addCallback(
-            lambda _ : self.db.buildsets.getSubscribedBuildsets(92))
+        d.addCallback(lambda _ :
+                self.db.buildsets.getSubscribedBuildsets(92))
         def check(res):
             self.assertEqual(sorted(res), sorted([
                     (12, 120, 0, -1),

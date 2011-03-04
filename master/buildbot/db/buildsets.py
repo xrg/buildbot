@@ -43,8 +43,8 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
         @type reason: short unicode string
 
         @param properties: properties for this buildset
-        @type properties: L{buildbot.process.properties.Properties} instance,
-        or None
+        @type properties: dictionary, where values are tuples of (value,
+        source)
 
         @param builderNames: builders specified by this buildset
         @type builderNames: list of strings
@@ -74,7 +74,7 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
                 conn.execute(self.db.model.buildset_properties.insert(), [
                     dict(buildsetid=bsid, property_name=k,
                          property_value=json.dumps([v,s]))
-                    for (k,v,s) in properties.asList() ])
+                    for k,(v,s) in properties.iteritems() ])
 
             # and finish with a build request for each builder
             conn.execute(self.db.model.buildrequests.insert(), [
@@ -90,7 +90,7 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
     def subscribeToBuildset(self, schedulerid, buildsetid):
         """
         Add a row to C{scheduler_upstream_buildsets} indicating that
-        C{SCHEDULERID} is interested in buildset @C{BSID}.
+        C{schedulerid} is interested in buildset C{bsid}.
 
         @param schedulerid: downstream scheduler
         @type schedulerid: integer
@@ -104,7 +104,7 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
             conn.execute(self.db.model.scheduler_upstream_buildsets.insert(),
                     schedulerid=schedulerid,
                     buildsetid=buildsetid,
-                    complete=0)
+                    active=1)
         return self.db.pool.do(thd)
 
     def unsubscribeFromBuildset(self, schedulerid, buildsetid):
@@ -151,7 +151,7 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
                 whereclause=(
                     (upstreams_tbl.c.schedulerid == schedulerid) &
                     (upstreams_tbl.c.buildsetid == bs_tbl.c.id) &
-                    (upstreams_tbl.c.active)),
+                    (upstreams_tbl.c.active != 0)),
                 distinct=True)
             return [ (row.id, row.sourcestampid, row.complete, row.results)
                      for row in conn.execute(q).fetchall() ]

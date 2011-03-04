@@ -65,7 +65,7 @@ class PBChangeSource(base.ChangeSource):
             portname = self.port
         else:
             portname = "all-purpose slaveport"
-        d = "PBChangeSource listener on " + portname
+        d = "PBChangeSource listener on " + str(portname)
         if self.prefix is not None:
             d += " (prefix '%s')" % self.prefix
         return d
@@ -89,4 +89,4 @@ class PBChangeSource(base.ChangeSource):
 
     def getPerspective(self, mind, username):
         assert username == self.user
-        return ChangePerspective(self.parent, self.prefix)
+        return ChangePerspective(self.master, self.prefix)

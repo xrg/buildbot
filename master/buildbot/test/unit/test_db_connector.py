@@ -14,9 +14,11 @@
 # Copyright Buildbot Team Members
 
 import os
+import mock
 from twisted.trial import unittest
 from buildbot.db import connector
 from buildbot.test.util import db
+from buildbot.test.fake import fakedb
 
 class DBConnector_Basic(db.RealDatabaseMixin, unittest.TestCase):
     """
@@ -24,16 +26,23 @@ class DBConnector_Basic(db.RealDatabaseMixin, unittest.TestCase):
     """
 
     def setUp(self):
-        self.setUpRealDatabase()
-        self.dbc = connector.DBConnector(self.db_url, os.path.abspath('basedir'))
-        self.dbc.start()
+        d = self.setUpRealDatabase(
+            table_names=['changes', 'change_properties', 'change_links',
+                    'change_files', 'patches', 'sourcestamps',
+                    'buildset_properties', 'buildsets' ])
+        def make_dbc(_):
+            self.dbc = connector.DBConnector(mock.Mock(), self.db_url,
+                                        os.path.abspath('basedir'))
+            self.dbc.start()
+        d.addCallback(make_dbc)
+        return d
 
     def tearDown(self):
         self.dbc.stop()
-        self.tearDownRealDatabase()
+        return self.tearDownRealDatabase()
 
     def test_runQueryNow_simple(self):
-        self.assertEqual(self.dbc.runQueryNow("SELECT 1"),
+        self.assertEqual(list(self.dbc.runQueryNow("SELECT 1")),
                          [(1,)])
 
     def test_runQueryNow_exception(self):
@@ -42,8 +51,8 @@ class DBConnector_Basic(db.RealDatabaseMixin, unittest.TestCase):
 
     def test_runInterationNow_simple(self):
         def inter(cursor, *args, **kwargs):
-            self.assertEqual(cursor.execute("SELECT 1").fetchall(),
-                             [(1,)])
+            cursor.execute("SELECT 1")
+            self.assertEqual(list(cursor.fetchall()), [(1,)])
         self.dbc.runInteractionNow(inter)
 
     def test_runInterationNow_args(self):
@@ -61,6 +70,28 @@ class DBConnector_Basic(db.RealDatabaseMixin, unittest.TestCase):
     def test_runQuery_simple(self):
         d = self.dbc.runQuery("SELECT 1")
         def cb(res):
-            self.assertEqual(res, [(1,)])
+            self.assertEqual(list(res), [(1,)])
         d.addCallback(cb)
+        return d
+
+    def test_getPropertiesFromDb(self):
+        d = self.insertTestData([
+                fakedb.Change(changeid=13),
+                fakedb.ChangeProperty(changeid=13, property_name='foo',
+                                    property_value='"my prop"'),
+                fakedb.SourceStamp(id=23),
+                fakedb.Buildset(id=33, sourcestampid=23),
+                fakedb.BuildsetProperty(buildsetid=33,
+                                    property_name='bar',
+                                    property_value='["other prop", "BS"]'),
+            ])
+        def do_test(_):
+            cprops = self.dbc.get_properties_from_db("change_properties",
+                                                        "changeid", 13)
+            bprops = self.dbc.get_properties_from_db("buildset_properties",
+                                                        "buildsetid", 33)
+            self.assertEqual(cprops.asList() + bprops.asList(),
+                    [ ('foo', 'my prop', 'Change'),
+                      ('bar', 'other prop', 'BS')])
+        d.addCallback(do_test)
         return d

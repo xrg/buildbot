@@ -37,7 +37,6 @@ class ChangeManager(service.MultiService):
     def __init__(self):
         service.MultiService.__init__(self)
         self.master = None
-        "the BuildMaster"
         self._cache = util.LRUCache()
         self.lastPruneChanges = 0
 
@@ -59,11 +58,3 @@ class ChangeManager(service.MultiService):
             return x
         d.addBoth(unset_master)
         return d
-
-    # IEventSource methods
-
-    def eventGenerator(self, branches=[], categories=[],
-                            committers=[], minTime=0): # pragma: no cover
-        # TODO: this function must be eliminated.
-        return self.parent.db.changes.changeEventGenerator(branches,
-                                                categories, committers, minTime)

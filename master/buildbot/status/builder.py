@@ -1466,7 +1466,7 @@ class BuildStatus(styles.Versioned):
         # for now, a serialized Build is always "finished". We will never
         # save unfinished builds.
         if not self.finished:
-            d['finished'] = True
+            d['finished'] = util.now()
             # TODO: push an "interrupted" step so it is clear that the build
             # was interrupted. The builder will have a 'shutdown' event, but
             # someone looking at just this build will be confused as to why
@@ -1581,7 +1581,7 @@ class BuildStatus(styles.Versioned):
 
 
 class BuilderStatus(styles.Versioned):
-    """I handle status information for a single process.base.Builder object.
+    """I handle status information for a single process.build.Builder object.
     That object sends status changes to me (frequently as Events), and I
     provide them on demand to the various status recipients, like the HTML
     waterfall display and the live status clients. It also sends build
@@ -1591,7 +1591,7 @@ class BuilderStatus(styles.Versioned):
     I am responsible for maintaining the list of historic Events and Builds,
     pruning old ones, and loading them from / saving them to disk.
 
-    I live in the buildbot.process.base.Builder object, in the
+    I live in the buildbot.process.build.Builder object, in the
     .builder_status attribute.
 
     @type  category: string
@@ -2287,7 +2287,7 @@ class Status:
 
     def __init__(self, botmaster, basedir):
         """
-        @type  botmaster: L{buildbot.master.BotMaster}
+        @type  botmaster: L{buildbot.process.botmaster.BotMaster}
         @param botmaster: the Status object uses C{.botmaster} to get at
                           both the L{buildbot.master.BuildMaster} (for
                           various buildbot-wide parameters) and the

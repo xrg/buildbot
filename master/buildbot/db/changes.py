@@ -17,8 +17,6 @@
 Support for changes in the database
 """
 
-import sys
-import Queue
 from buildbot.util import json
 import sqlalchemy as sa
 from twisted.python import log
@@ -35,74 +33,6 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
     changeHorizon = 0
     "maximum number of changes to keep on hand, or 0 to keep all changes forever"
     # TODO: add a threadsafe change cache
-
-    def changeEventGenerator(self, branches=[], categories=[], committers=[], minTime=0):
-        "deprecated. do not use."
-        # the technique here is to use a queue and a boolean value to
-        # communicate between the db thread and the main thread.  The queue
-        # sends completed change tuples to the main thread, while the boolean
-        # value indicates that the thread should exit.
-        #
-        # If this wacky hack seems sensible to you, you're not looking hard
-        # enough!  Once the web UI is rewritten (waterfall and console are the only
-        # consumers of the generator), this should be killed with fire.
-
-        queue = Queue.Queue(16)
-        stop_flag = [ False ]
-
-        def thd(conn):
-            try:
-                changes_tbl = self.db.model.changes
-
-                query = changes_tbl.select()
-                if branches:
-                    query = query.where(changes_tbl.c.branch.in_(branches))
-                if categories:
-                    query = query.where(changes_tbl.c.category.in_(categories))
-                if committers:
-                    query = query.where(changes_tbl.c.author.in_(committers))
-                if minTime:
-                    query = query.where(changes_tbl.c.when_timestamp > minTime)
-                query = query.order_by(sa.desc(changes_tbl.c.changeid))
-                change_rows = conn.execute(query)
-                for ch_row in change_rows:
-                    chdict = self._chdict_from_change_row_thd(conn, ch_row)
-                    # bail out if we've been asked to stop
-                    if stop_flag[0]:
-                        break
-                    queue.put(chdict)
-                queue.put(None)
-            except:
-                # push exceptions onto the queue and return
-                queue.put(sys.exc_info())
-        d = self.db.pool.do(thd)
-
-        # note that we don't actually look at the results of this deferred.  If
-        # an error occurs in the thread, it is handled by returning a tuple
-        # instead.  Still, we might as well handle any exceptions that get
-        # raised into failures
-        d.addErrback(log.err)
-
-        try:
-            while True:
-                chdict = queue.get()
-                if chdict is None:
-                    # we've seen all of the changes
-                    break
-                if isinstance(chdict, tuple):
-                    # exception in thread; raise it here
-                    raise chdict[0], chdict[1], chdict[2]
-                else:
-                    yield self._change_from_chdict(chdict)
-        # we'll get GeneratorExit when the generator is garbage-collected before it
-        # has finished, so signal to the thread that its work is finished.
-        # TODO: GeneratorExit is not supported in Python-2.4, which means this method
-        # won't work there.  Which is OK.  This method needs to die, quickly.
-        except GeneratorExit:
-            stop_flag[0] = False
-            # .. and drain the queue
-            while not queue.empty():
-                queue.get()
 
     def addChange(self, who, files, comments, isdir=0, links=None,
                  revision=None, when=None, branch=None, category=None,
@@ -121,28 +51,29 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
 
         @param isdir: deprecated
 
-        @param links: a list of links related to this change, e.g., to web viewers
-        or review pages
+        @param links: a list of links related to this change, e.g., to web
+        viewers or review pages
         @type links: list of unicode strings
 
         @param revision: the revision identifier for this change
         @type revision: unicode string
 
-        @param when: when this change occurs; defaults to now, and cannot be later
-        than now
+        @param when: when this change occurs
         @type when: integer (UNIX epoch time)
 
         @param branch: the branch on which this change took place
         @type branch: unicode string
 
-        @param category: category for this change (arbitrary use by Buildbot users)
+        @param category: category for this change (arbitrary use by Buildbot
+        users)
         @type category: unicode string
 
         @param revlink: link to a web view of this revision
         @type revlink: unicode string
 
         @param properties: properties to set on this change
-        @type properties: dictionary with string keys and simple values (JSON-able)
+        @type properties: dictionary with string keys and simple values
+        (JSON-able)
 
         @param repository: the repository in which this change took place
         @type repository: unicode string
@@ -161,6 +92,15 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
         # then add it to the database and update its '.number'
         def thd(conn):
             assert change.number is None
+
+            # note that in a read-uncommitted database like SQLite this
+            # transaction does not buy atomicitiy - other database users may
+            # still come across a change without its links, files, properties,
+            # etc.  That's OK, since we don't announce the change until it's
+            # all in the database, but beware.
+
+            transaction = conn.begin()
+
             ins = self.db.model.changes.insert()
             r = conn.execute(ins, dict(
                 author=change.who,
@@ -189,9 +129,14 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
             if change.properties:
                 ins = self.db.model.change_properties.insert()
                 conn.execute(ins, [
-                    dict(changeid=change.number, property_name=k, property_value=json.dumps(v))
-                        for k,v,s in change.properties.asList()
-                    ])
+                    dict(changeid=change.number,
+                        property_name=k,
+                        property_value=json.dumps(v))
+                    for k,v,s in change.properties.asList()
+                ])
+
+            transaction.commit()
+
             return change
         d = self.db.pool.do(thd)
         # prune changes, if necessary
@@ -227,6 +172,37 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
                 return None
             return self._change_from_chdict(chdict)
         d.addCallback(make_change)
+        return d
+
+    def getRecentChangeInstances(self, count):
+        """
+        Get a list of the C{count} most recent
+        L{buildbot.changes.changes.Change} instances, or fewer if that many do
+        not exist.
+
+        @param count: maximum number of instances to return
+
+        @returns: list of Change instances via Deferred
+        """
+        def thd(conn):
+            # get the row from the 'changes' table
+            changes_tbl = self.db.model.changes
+            q = changes_tbl.select(
+                    order_by=[sa.desc(changes_tbl.c.changeid)],
+                    limit=count)
+            rp = conn.execute(q)
+            changes = []
+            for row in rp:
+                # note that this does *three* extra queries per row!
+                changes.append(self._chdict_from_change_row_thd(conn, row))
+            rp.close()
+            return reversed(changes)
+        d = self.db.pool.do(thd)
+
+        def make_changes(chdict_list):
+            return [ self._change_from_chdict(chdict)
+                     for chdict in chdict_list ]
+        d.addCallback(make_changes)
         return d
 
     def getLatestChangeid(self):

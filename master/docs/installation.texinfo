@@ -2,6 +2,7 @@
 * Buildbot Components::
 * Requirements::
 * Installing the code::
+* Running Buildbot's Tests (optional)::
 * Creating a buildmaster::
 * Upgrading an Existing Buildmaster::
 * Creating a buildslave::
@@ -76,14 +77,25 @@ Buildbot's windows testing is limited to the most recent Twisted and Python
 versions.  For best results, use the most recent available versions of these
 libraries on Windows.
 
+Note that versions of MSys Git earlier than 1.7.3.1 are known to have problems
+with incorrect exit statuses from git commands.  Always use the newest version
+of MSys Git.
+
 @node Buildmaster Requirements
 @subsection Buildmaster Requirements
 
 @itemize @bullet
 @item
-sqlite3: http://pypi.python.org/pypi/pysqlite
+sqlite3: http://www.sqlite.org
 
-The sqlite3 package is required for python-2.5 and earlier (it is already
+Buildbot requires SQLite to store its state.  Version 3.3.8 or higher is
+recommended, as earlier versions had trouble with contention for database
+tables.
+
+@item
+pysqlite: http://pypi.python.org/pypi/pysqlite
+
+The SQLite Python package is required for python-2.5 and earlier (it is already
 included in python-2.5 and later, but the version in python-2.5 has nasty bugs)
 
 @item
@@ -155,7 +167,20 @@ Windows users will find these files in other places. You will need to
 make sure that python can find the libraries, and will probably find
 it convenient to have @code{buildbot} on your PATH.
 
-If you wish, you can run the buildbot unit test suite like this:
+@node Running Buildbot's Tests (optional)
+@section Running Buildbot's Tests (optional)
+
+If you wish, you can run the buildbot unit test suite.  First, ensure you have
+the @url{http://pypi.python.org/pypi/mock,mock} Python module installed from
+PyPi.  This module is not required for ordinary Buildbot operation - only to
+run the tests.  Note that this is not the same as the Fedora @code{mock}
+package!  You can check with
+
+@example
+python -mmock
+@end example
+
+Then, run the tests:
 
 @example
 PYTHONPATH=. trial buildbot.test
@@ -163,14 +188,19 @@ PYTHONPATH=. trial buildbot.test
 PYTHONPATH=. trial buildslave.test
 @end example
 
-Nothing should fail, a few might be skipped. If any of the tests fail, you
-should stop and investigate the cause before continuing the installation
-process, as it will probably be easier to track down the bug early.  This may
-be a good time to contact the Buildbot developers for help.
+Nothing should fail, although a few might be skipped.
 
-If you cannot or do not wish to install the buildbot into a site-wide
-location like @file{/usr} or @file{/usr/local}, you can also install
-it into the account's home directory or any other location using a tool like @url{http://pypi.python.org/pypi/virtualenv,virtualenv}.
+If any of the tests fail for reasons other than a missing @code{mock}, you
+should stop and investigate the cause before continuing the installation
+process, as it will probably be easier to track down the bug early.  In most
+cases, the problem is incorrectly installed Python modules or a badly
+configured PYTHONPATH.  This may be a good time to contact the Buildbot
+developers for help.
+
+If you cannot or do not wish to install the buildbot into a site-wide location
+like @file{/usr} or @file{/usr/local}, you can also install it into the
+account's home directory or any other location using a tool like
+@url{http://pypi.python.org/pypi/virtualenv,virtualenv}.
 
 @node Creating a buildmaster
 @section Creating a buildmaster
@@ -569,17 +599,23 @@ on Windows is 'mbcs', on Mac OSX is 'utf-8', and on Unix depends on your locale
 settings.
 
 If you need a different encoding, this can be changed in your build slave's
-buildbot.tac file by adding a unicode_encoding argument to BuildSlave:
+buildbot.tac file by adding a unicode_encoding argument to the BuildSlave
+constructor.
 
 @item allow_shutdown
-allow_shutdown can be passed to the BuildSlave constructor in buildbot.tac.
+allow_shutdown can be passed to the BuildSlave constructor in buildbot.tac.  If
+set, it allows the buildslave to initiate a graceful shutdown, meaning that it
+will ask the master to shut down the slave when the current build, if any, is
+complete.
 
 Setting allow_shutdown to 'file' will cause the buildslave to watch
-'shutdown.stamp' in basedir for updates to its mtime.  The file does not need
-to exist prior to starting the slave.
+'shutdown.stamp' in basedir for updates to its mtime.  When the mtime changes,
+the slave will request a graceful shutdown from the master.  The file does not
+need to exist prior to starting the slave.
 
 Setting allow_shutdown to 'signal' will set up a SIGHUP handler to start a
-graceful shutdown.
+graceful shutdown.  When the signal is received, the slave will request a
+graceful shutdown from the master.
 
 The default value is None, in which case this feature will be disabled.
 
