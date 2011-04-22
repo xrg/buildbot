@@ -6,7 +6,7 @@ The keys in this section affect the operations of the buildmaster globally.
 * Project Definitions::
 * Log Handling::
 * Data Lifetime::
-* Merging BuildRequests::
+* Merging Build Requests (global option)::
 * Prioritizing Builders::
 * Setting the PB Port for Slaves::
 * Defining Global Properties::
@@ -21,27 +21,53 @@ information, such as tracking pending build requests.  By default this is
 stored in a sqlite file called 'state.sqlite' in the base directory of your
 master.  This can be overridden with the @code{db_url} parameter.
 
-This parameter is of the form:
+The format of this parameter is completely documetned at
+@url{http://www.sqlalchemy.org/docs/dialects/}, but is generally of the form:
 
+@example
 driver://[username:password@@]host:port/database[?args]
+@end example
 
 For sqlite databases, since there is no host and port, relative paths are
-specified with @code{sqlite:///} and absolute paths with @code{sqlite:////}
+specified with @code{sqlite:///} and absolute paths with @code{sqlite:////}.
+Examples:
+
+Notes for particular database backends:
+
+@heading SQLite
 
 @example
 c['db_url'] = "sqlite:///state.sqlite"
+@end example
+
+No special configuration is required to use SQLite.
+
+@heading MySQL
+
+@example
 c['db_url'] = "mysql://user:pass@@somehost.com/database_name?max_idle=300"
 @end example
 
-The @code{max_idle} argument for MySQL connections should be set to something
-less than the wait_timeout configured for your server.  This controls the
-SQLAlchemy @code{pool_recycle} parameter, which defaults to no timeout.
-Setting this parameter ensures that connections are closed and re-opened after
-the configured amount of idle time.  If you see errors such as
-@code{_mysql_exceptions.OperationalError: (2006, 'MySQL server has gone
-away')}, this means your @code{max_idle} setting is probably too high.
+The @code{max_idle} argument for MySQL connections is unique to Buildbot, and
+should be set to something less than the wait_timeout configured for your
+server.  This controls the SQLAlchemy @code{pool_recycle} parameter, which
+defaults to no timeout.  Setting this parameter ensures that connections are
+closed and re-opened after the configured amount of idle time.  If you see
+errors such as @code{_mysql_exceptions.OperationalError: (2006, 'MySQL server
+has gone away')}, this means your @code{max_idle} setting is probably too high.
 @code{show global variables like 'wait_timeout';} will show what the currently
 configured @code{wait_timeout} is on your MySQL server.
+
+Buildbot requires @code{use_unique=True} and @code{charset=utf8}, and will add
+them automatically, so they do not need to be specified in @code{db_url}.
+
+@heading Postgres
+
+@example
+c['db_url'] = "postgresql://username@@hostname/dbname"
+@end example
+
+No special configuration is required to use Postgres.
 
 @node Multi-master mode
 @subsection Multi-master mode
@@ -242,52 +268,13 @@ changes from the database every time they run.  For distributed version control
 systems, like git or hg, several thousand changes may arrive at once, so
 setting @code{changeCacheSize} to something like 10,000 isn't unreasonable.
 
-@node Merging BuildRequests
-@subsection Merging BuildRequests
-
+@node Merging Build Requests (global option)
+@subsection Merging Build Requests (global option)
 @bcindex c['mergeRequests']
 
-By default, buildbot merges BuildRequests that have compatible
-SourceStamps.
-
-This can be disabled for any particular Builder by passing
-@code{mergeRequests=False} to the BuilderConfig definition (@pxref{Builders}).
-For example:
-
-@example
-c['builders'] = [
-  BuilderConfig(name='test-i386', slavename='bot-i386', builddir='test-i386',
-                factory=f, mergeRequests=False),
- ]
-@end example
-
-For more precise control, this behaviour can be customized with the
-buildmaster's @code{c['mergeRequests']} configuration key. This key
-specifies a function which is called with three arguments: a
-@code{Builder} and two @code{BuildRequest} objects. It should return
-true if the requests can be merged. For example:
-
-@example
-def mergeRequests(builder, req1, req2):
-    """Don't merge buildrequest at all"""
-    return False
-c['mergeRequests'] = mergeRequests
-@end example
-
-In many cases, the details of the SourceStamps and BuildRequests are important.
-In this example, only BuildRequests with the same "reason" are merged; thus
-developers forcing builds for different reasons will see distinct builds.
-
-@example
-def mergeRequests(builder, req1, req2):
-    if req1.source.canBeMergedWith(req2.source) and  req1.reason == req2.reason:
-       return True
-    return False
-c['mergeRequests'] = mergeRequests
-@end example
-
-If desired, request merging can be disabled globally by setting
-@code{c['mergeRequests'] = False} instead of a callable function.
+This is a global default value for builders' @code{mergeRequests} parameter,
+and controls the merging of build requests.  See @ref{Merging Build Requests}
+for more details.
 
 @node Prioritizing Builders
 @subsection Prioritizing Builders
@@ -417,7 +404,6 @@ the buildmaster's base directory.
 This one accepts SSH connections but asks for a username and password
 when authenticating. It accepts only one such pair.
 
-
 @item manhole.TelnetManhole
 This accepts regular unencrypted telnet connections, and asks for a
 username/password pair before providing access. Because this
@@ -470,4 +456,38 @@ Host remotehost-buildbot
  # use 'user' if you use PasswordManhole and your name is not 'admin'.
  # if you use AuthorizedKeysManhole, this probably doesn't matter.
  User admin
+@end example
+
+@heading Using Manhole
+
+After you have connected to a manhole instance, you will find yourself at a
+Python prompt.  You have access to two objects: @code{master} (the BuildMaster)
+and @code{status} (the master's Status object).  Most interesting objects on
+the master can be reached from these two objects.
+
+To aid in navigation, the @code{show} method is defined.  It displays the
+non-method attributes of an object.
+
+A manhole session might look like:
+
+@example
+>>> show(master)
+data attributes of <buildbot.master.BuildMaster instance at 0x7f7a4ab7df38>
+                       basedir : '/home/dustin/code/buildbot/t/buildbot/'...
+                     botmaster : <type 'instance'>
+                buildCacheSize : None
+                  buildHorizon : None
+                   buildbotURL : http://localhost:8010/
+               changeCacheSize : None
+                    change_svc : <type 'instance'>
+                configFileName : master.cfg
+                            db : <class 'buildbot.db.connector.DBConnector'>
+              db_poll_interval : None
+                        db_url : sqlite:///state.sqlite
+                              ...
+>>> show(master.botmaster.builders['win32'])
+data attributes of <Builder ''builder'' at 48963528>
+                              ...
+>>> win32 = _
+>>> win32.category = 'w32'
 @end example

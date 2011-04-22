@@ -19,10 +19,9 @@ Support for changes in the database
 
 from buildbot.util import json
 import sqlalchemy as sa
-from twisted.python import log
+from twisted.internet import defer
 from buildbot.changes.changes import Change
 from buildbot.db import base
-from buildbot import util
 
 class ChangesConnectorComponent(base.DBConnectorComponent):
     """
@@ -139,10 +138,6 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
 
             return change
         d = self.db.pool.do(thd)
-        # prune changes, if necessary
-        d.addCallback(lambda _ : self._prune_changes(change.number))
-        # return the change
-        d.addCallback(lambda _ : change)
         return d
 
     def getChangeInstance(self, changeid):
@@ -232,29 +227,30 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
 
     # utility methods
 
-    _last_prune = 0
-    def _prune_changes(self, last_added_changeid):
-        # this is an expensive operation, so only do it once per minute, in case
-        # addChange is called frequently
-        if not self.changeHorizon or self._last_prune > util.now() - 60:
-            return
-        self._last_prune = util.now()
-        log.msg("pruning changes")
-
+    def pruneChanges(self, changeHorizon):
+        if not changeHorizon:
+            return defer.succeed(None)
         def thd(conn):
             changes_tbl = self.db.model.changes
-            current_horizon = last_added_changeid - self.changeHorizon
 
-            # create a subquery giving the changes to delete
-            ids_to_delete_query = sa.select([changes_tbl.c.changeid],
-                                    whereclause=changes_tbl.c.changeid <= current_horizon)
+            # First, get the list of changes to delete.  This could be written
+            # as a subquery but then that subquery would be run for every
+            # table, which is very inefficient; also, MySQL's subquery support
+            # leaves much to be desired, and doesn't support this particular
+            # form.
+            q = sa.select([changes_tbl.c.changeid],
+                          order_by=[sa.desc(changes_tbl.c.changeid)],
+                          offset=changeHorizon)
+            res = conn.execute(q)
+            ids_to_delete = [ r.changeid for r in res ]
 
-            # and delete from all relevant tables, *ending* with the changes table
-            for table_name in ('scheduler_changes', 'sourcestamp_changes', 'change_files',
-                               'change_links', 'change_properties', 'changes'):
+            # and delete from all relevant tables, in dependency order
+            for table_name in ('scheduler_changes', 'sourcestamp_changes',
+                               'change_files', 'change_links',
+                               'change_properties', 'changes'):
                 table = self.db.model.metadata.tables[table_name]
                 conn.execute(
-                    table.delete(table.c.changeid.in_(ids_to_delete_query)))
+                    table.delete(table.c.changeid.in_(ids_to_delete)))
         return self.db.pool.do(thd)
 
     def _chdict_from_change_row_thd(self, conn, ch_row):

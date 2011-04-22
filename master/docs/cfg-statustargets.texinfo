@@ -573,7 +573,7 @@ in change comments.
 @subheading revlink
 
 The @code{revlink} is used to create links from revision IDs in the web status
-to a web-view of your source control system. The parametr's value must be a
+to a web-view of your source control system. The parameter's value must be a
 format string, a dict mapping a string (repository name) to format strings, or a callable.
 
 The format string should use '%s' to insert the revision id in the url.  For
@@ -582,7 +582,9 @@ example, for Buildbot on github:
 will be URL encoded before inserted in the replacement string)
 
 The callable takes the revision id and repository argument, and should return
-an URL to the revision. 
+an URL to the revision.  Note that the revision id may not always be in the
+form you expect, so code defensively.  In particular, a revision of "??" may be
+supplied when no other information is available.
 
 Note that SourceStamps that are not created from version-control changes (e.g.,
 those created by a Nightly or Periodic scheduler) will have an empty repository
@@ -673,7 +675,8 @@ With this set up, add a Post-Receive URL for the project in the Github
 administrative interface, pointing to @code{/change_hook/github} relative to
 the root of the web status.  For example, if the grid URL is
 @code{http://builds.mycompany.com/bbot/grid}, then point Github to
-@code{http://builds.mycompany.com/bbot/change_hook/github}.
+@code{http://builds.mycompany.com/bbot/change_hook/github}. To specify a project
+assoicated to the repository, append @code{?project=name} to the URL.
 
 Note that there is a standalone HTTP server available for receiving github
 notifications, as well: @code{contrib/github_buildbot.py}.  This script may be
@@ -862,7 +865,7 @@ def html_message_formatter(mode, name, build, results, master_status):
         text.append(u'<br>')
         text.append(u'<h4>Last %d lines of "%s"</h4>' % (limit_lines, name))
         unilist = list()
-        for line in content[len(content)-limit_lines:]:
+        for line in content[-limit_lines:]:
             unilist.append(cgi.escape(unicode(line,'utf-8')))
         text.append(u'<pre>'.join([uniline for uniline in unilist]))
         text.append(u'</pre>')

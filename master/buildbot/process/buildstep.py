@@ -26,7 +26,7 @@ from twisted.web.util import formatFailure
 
 from buildbot import interfaces, locks
 from buildbot.status import progress
-from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE, SKIPPED, \
+from buildbot.status.results import SUCCESS, WARNINGS, FAILURE, SKIPPED, \
      EXCEPTION, RETRY, worst_status
 
 """
@@ -246,7 +246,7 @@ class LoggedRemoteCommand(RemoteCommand):
 
     I am a L{RemoteCommand} which gathers output from the remote command into
     one or more local log files. My C{self.logs} dictionary contains
-    references to these L{buildbot.status.builder.LogFile} instances. Any
+    references to these L{buildbot.status.logfile.LogFile} instances. Any
     stdout/stderr/header updates from the slave will be put into
     C{self.logs['stdio']}, if it exists. If the remote command uses other log
     files, they will go into other entries in C{self.logs}.
@@ -563,7 +563,7 @@ class BuildStep:
     Deferred it returns.
 
     Each BuildStep generates status as it runs. This status data is fed to
-    the L{buildbot.status.builder.BuildStepStatus} listener that sits in
+    the L{buildbot.status.buildstep.BuildStepStatus} listener that sits in
     C{self.step_status}. It can also feed progress data (like how much text
     is output by a shell command) to the
     L{buildbot.status.progress.StepProgress} object that lives in
@@ -576,7 +576,7 @@ class BuildStep:
     @type progress: L{buildbot.status.progress.StepProgress}
     @ivar progress: tracks ETA for the step
 
-    @type step_status: L{buildbot.status.builder.BuildStepStatus}
+    @type step_status: L{buildbot.status.buildstep.BuildStepStatus}
     @ivar step_status: collects output status
     """
 
@@ -740,6 +740,7 @@ class BuildStep:
 
         d = self.acquireLocks()
         d.addCallback(self._startStep_2)
+        d.addErrback(self.failed)
         return self.deferred
 
     def acquireLocks(self, res=None):
@@ -771,28 +772,32 @@ class BuildStep:
         if self.progress:
             self.progress.start()
 
+        doStep = defer.succeed(True)
+        if isinstance(self.doStepIf, bool):
+            if not self.doStepIf:
+                doStep = defer.succeed(False)
+        else:
+            doStep = defer.maybeDeferred(self.doStepIf, self)
+        doStep.addCallback(self._startStep_3)
+        return doStep
+
+    def _startStep_3(self, doStep):
         try:
-            skip = None
-            if isinstance(self.doStepIf, bool):
-                if not self.doStepIf:
-                    skip = SKIPPED
-            elif not self.doStepIf(self):
-                skip = SKIPPED
-
-            if skip is None:
-                skip = self.start()
-
-            if skip == SKIPPED:
-                self.step_status.setText(self.describe(True) + ['skipped'])
-                self.step_status.setSkipped(True)
-                # this return value from self.start is a shortcut to finishing
-                # the step immediately; we skip calling finished() as
-                # subclasses may have overridden that an expect it to be called
-                # after start() (bug #837)
-                reactor.callLater(0, self._finishFinished, SKIPPED)
+            if doStep:
+                if self.start() == SKIPPED:
+                    doStep = False
         except:
             log.msg("BuildStep.startStep exception in .start")
             self.failed(Failure())
+
+        if not doStep:
+            self.step_status.setText(self.describe(True) + ['skipped'])
+            self.step_status.setSkipped(True)
+            # this return value from self.start is a shortcut to finishing
+            # the step immediately; we skip calling finished() as
+            # subclasses may have overridden that an expect it to be called
+            # after start() (bug #837)
+            reactor.callLater(0, self._finishFinished, SKIPPED)
 
     def start(self):
         """Begin the step. Override this method and add code to do local

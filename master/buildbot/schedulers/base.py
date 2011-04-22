@@ -261,7 +261,8 @@ class BaseScheduler(service.MultiService, ComparableMixin):
         @returns: buildset ID via Deferred
         """
         d = self.master.db.sourcestamps.createSourceStamp(
-                branch=branch, repository=repository, project=project)
+                branch=branch, revision=None, repository=repository,
+                project=project)
         d.addCallback(self.addBuildsetForSourceStamp, reason=reason,
                                 external_idstring=external_idstring,
                                 builderNames=builderNames,
@@ -340,7 +341,7 @@ class BaseScheduler(service.MultiService, ComparableMixin):
 
         # translate properties object into a dict as required by the
         # addBuildset method
-        properties_dict = dict((k, (v,s)) for (k,v,s) in properties.asList())
+        properties_dict = properties.asDict()
 
         # add the buildset
         return self.master.addBuildset(

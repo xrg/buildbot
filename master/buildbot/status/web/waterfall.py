@@ -22,7 +22,7 @@ import time, locale
 import operator
 
 from buildbot import interfaces, util
-from buildbot.status import builder
+from buildbot.status import builder, buildstep, build
 
 from buildbot.status.web.base import Box, HtmlResource, IBox, ICurrentBox, \
      ITopBox, build_get_class, path_to_build, path_to_step, path_to_root, \
@@ -105,12 +105,13 @@ class CurrentBox(components.Adapter):
         # when the builder is otherwise idle.
 
         # are any builds pending? (waiting for a slave to be free)
-        pbs = self.original.getPendingBuilds()
+        pbs = self.original.getPendingBuildRequestStatuses()
         if pbs:
             text.append("%d pending" % len(pbs))
         for t in upcoming:
-            eta = t - util.now()
-            text.extend(self.formatETA("next in", eta))
+            if t is not None:
+                eta = t - util.now()
+                text.extend(self.formatETA("next in", eta))
         return Box(text, class_="Activity " + state)
 
 components.registerAdapter(CurrentBox, builder.BuilderStatus, ICurrentBox)
@@ -156,7 +157,7 @@ class BuildBox(components.Adapter):
             # of whether it succeeded or failed.
             class_ = build_get_class(b)
         return Box([text], class_="BuildStep " + class_)
-components.registerAdapter(BuildBox, builder.BuildStatus, IBox)
+components.registerAdapter(BuildBox, build.BuildStatus, IBox)
 
 class StepBox(components.Adapter):
     implements(IBox)
@@ -188,7 +189,7 @@ class StepBox(components.Adapter):
         
         class_ = "BuildStep " + build_get_class(self.original)
         return Box(text, class_=class_)
-components.registerAdapter(StepBox, builder.BuildStepStatus, IBox)
+components.registerAdapter(StepBox, buildstep.BuildStepStatus, IBox)
 
 
 class EventBox(components.Adapter):

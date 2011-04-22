@@ -15,7 +15,8 @@
 
 import base64
 
-from twisted.python import threadable
+from twisted.python import threadable, log
+from twisted.application import internet, service
 from buildbot.db import enginestrategy
 
 from buildbot import util
@@ -23,11 +24,11 @@ from buildbot.util import collections as bbcollections
 from buildbot.sourcestamp import SourceStamp
 from buildbot.process.buildrequest import BuildRequest
 from buildbot.process.properties import Properties
-from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE
+from buildbot.status.results import SUCCESS, WARNINGS, FAILURE
 from buildbot.util.eventual import eventually
 from buildbot.util import json
 from buildbot.db import pool, model, changes, schedulers, sourcestamps
-from buildbot.db import state, buildsets
+from buildbot.db import state, buildsets, buildrequests
 
 def _one_or_else(res, default=None, process_f=lambda x: x):
     if not res:
@@ -55,7 +56,7 @@ class TempAdbapiPool(adbapi.ConnectionPool):
     def stop(self):
         pass
 
-class DBConnector(object):
+class DBConnector(service.MultiService):
     """
     The connection between Buildbot and its backend database.  This is
     generally accessible as master.db, but is also used during upgrades.
@@ -68,7 +69,12 @@ class DBConnector(object):
     synchronized = ["notify", "_end_operation"] # TODO: remove
     MAX_QUERY_TIMES = 1000
 
+    # Period, in seconds, of the cleanup task.  This master will perform
+    # periodic cleanup actions on this schedule.
+    CLEANUP_PERIOD = 3600
+
     def __init__(self, master, db_url, basedir):
+        service.MultiService.__init__(self)
         self.master = master
         self.basedir = basedir
         "basedir for this master - used for upgrades"
@@ -102,9 +108,16 @@ class DBConnector(object):
         self.buildsets = buildsets.BuildsetsConnectorComponent(self)
         "L{buildbot.db.sourcestamps.BuildsetsConnectorComponent} instance"
 
+        self.buildrequests = buildrequests.BuildRequestsConnectorComponent(self)
+        "L{buildbot.db.sourcestamps.BuildRequestsConnectorComponent} instance"
+
         self.state = state.StateConnectorComponent(self)
         "L{buildbot.db.state.StateConnectorComponent} instance"
 
+        self.cleanup_timer = internet.TimerService(self.CLEANUP_PERIOD, self.doCleanup)
+        self.cleanup_timer.setServiceParent(self)
+
+        self.changeHorizon = None # default value; set by master
 
     def _getCurrentTime(self): # TODO: remove
         # this is a seam for use in testing
@@ -139,13 +152,13 @@ class DBConnector(object):
         # PostgreSQL:
         # * doesn't return last row id, so we must append "RETURNING x"
         #   to queries where we want it and we must fetch it later,
-        # * doesn't accept "?" in queries.
+        # PostgreSQL and MySQL:
+        # * don't accept "?" in queries.
+        if self._engine.dialect.name in ('postgres', 'postgresql', 'mysql'):
+            query = query.replace("?", "%s")
         if self._engine.dialect.name in ('postgres', 'postgresql'):
             if returning:
                 query += " RETURNING %s" % returning
-            return query.replace("?", "%s")
-
-        # default
         return query
 
     def lastrowid(self, t): # TODO: remove
@@ -317,7 +330,7 @@ class DBConnector(object):
         # call this with a weird-looking tablename.
         q = self.quoteq("SELECT property_name,property_value FROM %s WHERE %s=?"
                         % (tablename, idname))
-        t.execute(q, (id,))
+        t.execute(self.quoteq(q), (id,))
         retval = Properties()
         for key, value_json in t.fetchall():
             value = json.loads(value_json)
@@ -355,7 +368,7 @@ class DBConnector(object):
         ss = self.getSourceStampNumberedNow(ssid, t)
         properties = self.get_properties_from_db("buildset_properties",
                                                  "buildsetid", bsid, t)
-        br = BuildRequest(reason, ss, builder_name, properties)
+        br = BuildRequest.oldConstructor(reason, ss, builder_name, properties)
         br.submittedAt = submitted_at
         br.priority = priority
         br.id = brid
@@ -415,6 +428,7 @@ class DBConnector(object):
             qargs = [now, master_name, master_incarnation] + list(batch)
             t.execute(q, qargs)
 
+    # used by Builder._startBuildFor_2
     def build_started(self, brid, buildnumber):
         return self.runInteractionNow(self._txn_build_started, brid, buildnumber)
     def _txn_build_started(self, t, brid, buildnumber):
@@ -426,6 +440,7 @@ class DBConnector(object):
         self.notify("add-build", bid)
         return bid
 
+    # used by Builder.buildFinished
     def builds_finished(self, bids):
         return self.runInteractionNow(self._txn_build_finished, bids)
     def _txn_build_finished(self, t, bids):
@@ -437,6 +452,7 @@ class DBConnector(object):
             qargs = [now] + list(batch)
             t.execute(q, qargs)
 
+    # used by Status
     def get_build_info(self, bid):
         return self.runInteractionNow(self._txn_get_build_info, bid)
     def _txn_get_build_info(self, t, bid):
@@ -450,6 +466,7 @@ class DBConnector(object):
             return res[0]
         return (None,None,None)
 
+    # used by BuildRequestStatus.getBuilds
     def get_buildnums_for_brid(self, brid):
         return self.runInteractionNow(self._txn_get_buildnums_for_brid, brid)
     def _txn_get_buildnums_for_brid(self, t, brid):
@@ -457,6 +474,7 @@ class DBConnector(object):
                   (brid,))
         return [number for (number,) in t.fetchall()]
 
+    # used by Builder.buildFinished
     def resubmit_buildrequests(self, brids):
         return self.runInteraction(self._txn_resubmit_buildreqs, brids)
     def _txn_resubmit_buildreqs(self, t, brids):
@@ -471,6 +489,7 @@ class DBConnector(object):
             t.execute(q, batch)
         self.notify("add-buildrequest", *brids)
 
+    # used by Builder.buildFinished
     def retire_buildrequests(self, brids, results):
         return self.runInteractionNow(self._txn_retire_buildreqs, brids,results)
     def _txn_retire_buildreqs(self, t, brids, results):
@@ -497,6 +516,7 @@ class DBConnector(object):
         self.notify("retire-buildrequest", *brids)
         self.notify("modify-buildset", *bsids)
 
+    # used by BuildRequestControl.cancel and Builder.cancelBuildRequest
     def cancel_buildrequests(self, brids):
         return self.runInteractionNow(self._txn_cancel_buildrequest, brids)
     def _txn_cancel_buildrequest(self, t, brids):
@@ -560,6 +580,7 @@ class DBConnector(object):
             # notify the master
             self.master.buildsetComplete(bsid, bs_results)
 
+    # used by BuildSetStatus
     def get_buildrequestids_for_buildset(self, bsid):
         return self.runInteractionNow(self._txn_get_buildrequestids_for_buildset,
                                       bsid)
@@ -569,6 +590,7 @@ class DBConnector(object):
                   (bsid,))
         return dict(t.fetchall())
 
+    # use by Status.getBuildSets
     def examine_buildset(self, bsid):
         return self.runInteractionNow(self._txn_examine_buildset, bsid)
     def _txn_examine_buildset(self, t, bsid):
@@ -594,11 +616,7 @@ class DBConnector(object):
             successful = True
         return (successful, finished)
 
-    def get_active_buildset_ids(self):
-        return self.runInteractionNow(self._txn_get_active_buildset_ids)
-    def _txn_get_active_buildset_ids(self, t):
-        t.execute("SELECT id FROM buildsets WHERE complete=0")
-        return [bsid for (bsid,) in t.fetchall()]
+    # used by BuildSetStatus.getReason, etc.
     def get_buildset_info(self, bsid):
         return self.runInteractionNow(self._txn_get_buildset_info, bsid)
     def _txn_get_buildset_info(self, t, bsid):
@@ -615,6 +633,7 @@ class DBConnector(object):
             return (external_idstring, reason, ssid, complete, results)
         return None # shouldn't happen
 
+    # used by BuilderStatus.getPendingBuilds
     def get_pending_brids_for_builder(self, buildername):
         return self.runInteractionNow(self._txn_get_pending_brids_for_builder,
                                       buildername)
@@ -675,6 +694,15 @@ class DBConnector(object):
         c.number = changeid
         return c
 
+    def doCleanup(self):
+        """
+        Perform any periodic database cleanup tasks.
+
+        @returns: Deferred
+        """
+        d = self.changes.pruneChanges(self.changeHorizon)
+        d.addErrback(log.err, 'while pruning changes')
+        return d
 
 threadable.synchronize(DBConnector)
 

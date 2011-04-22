@@ -16,7 +16,7 @@
 from twisted.internet import defer
 from twisted.python import log
 from buildbot import util
-from buildbot.status.builder import SUCCESS, WARNINGS
+from buildbot.status.results import SUCCESS, WARNINGS
 from buildbot.schedulers import base
 
 class Dependent(base.BaseScheduler):
@@ -56,7 +56,7 @@ class Dependent(base.BaseScheduler):
     def _buildsetAdded(self, bsid=None, properties=None, **kwargs):
         # check if this was submitetted by our upstream by checking the
         # scheduler property
-        submitter = properties.getProperty('scheduler', None)
+        submitter = properties.get('scheduler', (None, None))[0]
         if submitter != self.upstream_name:
             return
 

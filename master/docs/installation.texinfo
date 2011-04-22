@@ -130,11 +130,34 @@ schema upgrades from version to version.
 @node Installing the code
 @section Installing the code
 
-@cindex installation
+@heading The Distribution Packages
 
-Buildbot and Buildslave are installed using the standard python
-@code{distutils} process. For either component, after unpacking the tarball,
-the process is:
+@cindex Packages
+@cindex Installation
+@cindex PyPI
+
+Buildbot comes in two parts: @code{buildbot} (the master) and
+@code{buildbot-slave} (the slave).  The two can be installed individually or
+together.
+
+@heading Installation From PyPI
+
+The easiest way to install Buildbot is using 'pip'.  For the master:
+@example
+pip install buildbot
+@end example
+
+and for the slave:
+
+@example
+pip install buildbot-slave
+@end example
+
+@heading Installation From Tarballs
+
+Buildbot and Buildslave can also be installed using the standard python
+@code{distutils} process. For either component (buildbot or buildbot-slave),
+after unpacking the tarball, the process is:
 
 @example
 python setup.py build
@@ -320,11 +343,15 @@ In general, Buildbot slaves and masters can be upgraded independently, although
 some new features will not be available, depending on the master and slave
 versions.
 
+Beyond this general information, read all of the sections below that apply to
+versions through which you are upgrading.
+
 @heading Version-specific Notes
 
 @menu
 * Upgrading a Buildmaster to Buildbot-0.7.6::
 * Upgrading a Buildmaster to Buildbot-0.8.0::
+* Upgrading a Buildmaster to Later Versions::
 @end menu
 
 @node Upgrading a Buildmaster to Buildbot-0.7.6
@@ -346,6 +373,19 @@ Buildbot-0.8.0 introduces a database backend, which is SQLite by default.  The
 database with the changes the buildmaster has seen.  Note that, as of this
 release, build history is @i{not} contained in the database, and is thus not
 migrated.
+
+You will need to add an entry into your @file{master.cfg} to reflect the 
+database version you are using. The upgrade process does @i{not} edit your
+@file{master.cfg} for you. So something like:
+
+@example
+# for the default sqlite you need:
+c['db_url'] = "sqlite:///state.sqlite"
+# or for using mysql:
+c['db_url'] = 'mysql://bbuser:<password>@@localhost/buildbot'
+@end example
+
+See @pxref{Database Specification} for more options.
 
 The upgrade process renames the Changes pickle (@code{$basedir/changes.pck}) to
 @code{changes.pck.old} once the upgrade is complete.  To reverse the upgrade,
@@ -375,6 +415,12 @@ backing up changes.pck to changes.pck.old
 
 If your Changes pickle uses multiple encodings, you're on your own, but the
 script in contrib may provide a good starting point for the fix.
+
+@node Upgrading a Buildmaster to Later Versions
+@subsection Upgrading a Buildmaster to Later Versions
+
+Up to Buildbot version @value{VERSION}, no further steps beyond those described
+above are required.
 
 @node Creating a buildslave
 @section Creating a buildslave
@@ -871,7 +917,7 @@ which find's @code{-mindepth} argument helps skip everything in the
 top directory. You can use something like the following:
 
 @example
-@@weekly cd BASEDIR && find . -mindepth 2 i-path './public_html/*' -prune -o -type f -mtime +14 -exec rm @{@} \;
+@@weekly cd BASEDIR && find . -mindepth 2 -ipath './public_html/*' -prune -o -type f -mtime +14 -exec rm @{@} \;
 @@weekly cd BASEDIR && find twistd.log* -mtime +14 -exec rm @{@} \;
 @end example
 

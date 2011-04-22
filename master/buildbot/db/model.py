@@ -65,14 +65,14 @@ class Model(base.DBConnectorComponent):
     buildrequests = sa.Table('buildrequests', metadata,
         sa.Column('id', sa.Integer,  primary_key=True),
         sa.Column('buildsetid', sa.Integer, sa.ForeignKey("buildsets.id"), nullable=False),
-        sa.Column('buildername', sa.String(length=None), nullable=False),
+        sa.Column('buildername', sa.String(length=256), nullable=False),
         sa.Column('priority', sa.Integer, nullable=False, server_default=sa.DefaultClause("0")), # TODO: used?
 
         # claimed_at is the time at which a master most recently asserted that
         # it is responsible for running the build: this will be updated
         # periodically to maintain the claim.  Note that 0 and NULL mean the
         # same thing here (and not 1969!)
-        sa.Column('claimed_at', sa.Integer, server_default=sa.DefaultClause("0")), # TODO: timestamp
+        sa.Column('claimed_at', sa.Integer, server_default=sa.DefaultClause("0")),
 
         # claimed_by indicates which buildmaster has claimed this request. The
         # 'name' contains hostname/basedir, and will be the same for subsequent
@@ -80,8 +80,8 @@ class Model(base.DBConnectorComponent):
         # and will be different for subsequent runs. This allows each buildmaster
         # to distinguish their current claims, their old claims, and the claims
         # of other buildmasters, to treat them each appropriately.
-        sa.Column('claimed_by_name', sa.String(length=None)),
-        sa.Column('claimed_by_incarnation', sa.String(length=None)),
+        sa.Column('claimed_by_name', sa.String(length=256)),
+        sa.Column('claimed_by_incarnation', sa.String(length=256)),
 
         # if this is zero, then the build is still pending
         sa.Column('complete', sa.Integer, server_default=sa.DefaultClause("0")), # TODO: boolean
@@ -91,10 +91,10 @@ class Model(base.DBConnectorComponent):
         sa.Column('results', sa.SmallInteger),
 
         # time the buildrequest was created
-        sa.Column('submitted_at', sa.Integer, nullable=False), # TODO: timestamp
+        sa.Column('submitted_at', sa.Integer, nullable=False),
 
         # time the buildrequest was completed, or NULL
-        sa.Column('complete_at', sa.Integer), # TODO: timestamp
+        sa.Column('complete_at', sa.Integer),
     )
     """A BuildRequest is a request for a particular build to be performed.
     Each BuildRequest is a part of a BuildSet.  BuildRequests are claimed by
@@ -136,11 +136,11 @@ class Model(base.DBConnectorComponent):
         # a short string giving the reason the buildset was created
         sa.Column('reason', sa.String(256)), # TODO: sa.Text
         sa.Column('sourcestampid', sa.Integer, sa.ForeignKey('sourcestamps.id'), nullable=False),
-        sa.Column('submitted_at', sa.Integer, nullable=False), # TODO: timestamp (or redundant?)
+        sa.Column('submitted_at', sa.Integer, nullable=False), # TODO: redundant
 
         # if this is zero, then the build set is still pending
         sa.Column('complete', sa.SmallInteger, nullable=False, server_default=sa.DefaultClause("0")), # TODO: redundant
-        sa.Column('complete_at', sa.Integer), # TODO: timestamp (or redundant?)
+        sa.Column('complete_at', sa.Integer), # TODO: redundant
 
         # results is only valid when complete == 1; 0 = SUCCESS, 1 = WARNINGS,
         # etc - see master/buildbot/status/builder.py
@@ -176,7 +176,7 @@ class Model(base.DBConnectorComponent):
         sa.Column('changeid', sa.Integer,  primary_key=True), # TODO: rename to 'id'
 
         # author's name (usually an email address)
-        sa.Column('author', sa.String(1024), nullable=False),
+        sa.Column('author', sa.String(256), nullable=False),
 
         # commit comment
         sa.Column('comments', sa.String(1024), nullable=False), # TODO: too short?
@@ -186,7 +186,7 @@ class Model(base.DBConnectorComponent):
 
         # The branch where this change occurred.  When branch is NULL, that
         # means the main branch (trunk, master, etc.)
-        sa.Column('branch', sa.String(1024)),
+        sa.Column('branch', sa.String(256)),
 
         # revision identifier for this change
         sa.Column('revision', sa.String(256)), # CVS uses NULL
@@ -204,11 +204,11 @@ class Model(base.DBConnectorComponent):
 
         # repository specifies, along with revision and branch, the
         # source tree in which this change was detected.
-        sa.Column('repository', sa.Text, nullable=False, server_default=''),
+        sa.Column('repository', sa.String(length=512), nullable=False, server_default=''),
 
         # project names the project this source code represents.  It is used
         # later to filter changes
-        sa.Column('project', sa.Text, nullable=False, server_default=''),
+        sa.Column('project', sa.String(length=512), nullable=False, server_default=''),
     )
     """Changes to the source code, produced by ChangeSources"""
 
@@ -249,10 +249,10 @@ class Model(base.DBConnectorComponent):
         sa.Column('patchid', sa.Integer, sa.ForeignKey('patches.id')),
 
         # the repository from which this source should be checked out
-        sa.Column('repository', sa.Text(length=None), nullable=False, server_default=''),
+        sa.Column('repository', sa.String(length=512), nullable=False, server_default=''),
 
         # the project this source code represents
-        sa.Column('project', sa.Text(length=None), nullable=False, server_default=''),
+        sa.Column('project', sa.String(length=512), nullable=False, server_default=''),
     )
     """A sourcestamp identifies a particular instance of the source code.
     Ideally, this would always be absolute, but in practice source stamps can
@@ -316,9 +316,9 @@ class Model(base.DBConnectorComponent):
     object_state = sa.Table("object_state", metadata,
         # object for which this value is set
         sa.Column("objectid", sa.Integer, sa.ForeignKey('objects.id'),
-                              nullable=False),
+            nullable=False),
         # name for this value (local to the object)
-        sa.Column("name", sa.String(length=None), nullable=False),
+        sa.Column("name", sa.String(length=256), nullable=False),
         # value, as a JSON string
         sa.Column("value_json", sa.Text, nullable=False),
 
@@ -438,8 +438,11 @@ class Model(base.DBConnectorComponent):
                 # set up migrate at the same version
                 version_control(engine, old_version)
 
-                # drop the no-longer-required version table
-                engine.drop('version')
+                # drop the no-longer-required version table, using a dummy
+                # metadata entry
+                table = sa.Table('version', self.metadata,
+                                 sa.Column('x', sa.Integer))
+                table.drop(bind=engine)
 
                 # and, finally, upgrade using migrate
                 upgrade(engine)

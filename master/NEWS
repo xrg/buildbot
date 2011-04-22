@@ -23,6 +23,18 @@ import path will still work.
 *** The Dependent scheduler is now in its own module,
 'buildbot.schedulers.dependent', although the old name will continue to work.
 
+*** The mergeRequests parameters are now more flexible, but an incompatible
+change was made: if the BuilderConfig mergeRequests argument is explicitly set
+to True, then the default merge method will be used.  In earlier versions, this
+configuration fell back to the global c['mergeRequests'] parameter's value.  To
+avoid this, remove `mergeRequests=True` from any BuilderConfig constructor
+invocations.
+
+*** The `Status.getBuildSets` method now returns its result via Deferred.
+
+*** The `BuilderControl.getPendingBuilds` method has been renamed to
+`getPendingBuildRequestControls`
+
 ** Scheduler Improvements
 
 *** Nightly scheduler now accepts a change_filter argument
@@ -33,6 +45,11 @@ Buildbot now uses SQLAlchemy as a database abstraction layer.  This will give
 us greater inter-database compatibility and a more stable and reliable basis
 for this core component of the framework.  SQLAlchemy-Migrate is used to manage
 changes to the database schema from version to version.
+
+*** Postgres support
+
+Buildbot should now work with a Postgres backend just as well as it does with
+MySQL or SQLite.  Buildbot is actively tested against all three backends.
 
 ** Less garish color scheme
 

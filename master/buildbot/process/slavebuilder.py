@@ -78,7 +78,8 @@ class AbstractSlaveBuilder(pb.Referenceable):
 
     def buildFinished(self):
         self.state = IDLE
-        self.builder.triggerNewBuildCheck()
+        if self.slave:
+            self.slave.buildFinished(self)
 
     def attached(self, slave, remote, commands):
         """
@@ -100,29 +101,22 @@ class AbstractSlaveBuilder(pb.Referenceable):
             assert self.slave == slave
         log.msg("Buildslave %s attached to %s" % (slave.slavename,
                                                   self.builder_name))
-        def _attachFailure(why, where):
-            log.msg(where)
-            log.err(why)
-            return why
-
         d = defer.succeed(None)
-        def doSetMaster(res):
-            d = self.remote.callRemote("setMaster", self)
-            #d.addErrback(_attachFailure, "Builder.setMaster")
-            return d
-        d.addCallback(doSetMaster)
-        def doPrint(res):
-            d = self.remote.callRemote("print", "attached")
-            #d.addErrback(_attachFailure, "Builder.print 'attached'")
-            return d
-        d.addCallback(doPrint)
+
+        d.addCallback(lambda _:
+            self.remote.callRemote("setMaster", self))
+
+        d.addCallback(lambda _:
+            self.remote.callRemote("print", "attached"))
+
         def setIdle(res):
             self.state = IDLE
             return self
         d.addCallback(setIdle)
+
         return d
 
-    def prepare(self, builder_status):
+    def prepare(self, builder_status, build):
         if not self.slave.acquireLocks():
             return defer.succeed(False)
         return defer.succeed(True)
@@ -225,18 +219,6 @@ class SlaveBuilder(AbstractSlaveBuilder):
         self.slave = None
         self.state = ATTACHING
 
-    def buildFinished(self):
-        # Call the slave's buildFinished if we can; the slave may be waiting
-        # to do a graceful shutdown and needs to know when it's idle.
-        # After, we check to see if we can start other builds.
-        self.state = IDLE
-        if self.slave:
-            d = self.slave.buildFinished(self)
-            d.addCallback(lambda x: self.builder.triggerNewBuildCheck())
-        else:
-            self.builder.triggerNewBuildCheck()
-
-
 class LatentSlaveBuilder(AbstractSlaveBuilder):
     def __init__(self, slave, builder):
         AbstractSlaveBuilder.__init__(self)
@@ -247,13 +229,13 @@ class LatentSlaveBuilder(AbstractSlaveBuilder):
         log.msg("Latent buildslave %s attached to %s" % (slave.slavename,
                                                          self.builder_name))
 
-    def prepare(self, builder_status):
+    def prepare(self, builder_status, build):
         # If we can't lock, then don't bother trying to substantiate
         if not self.slave.acquireLocks():
             return defer.succeed(False)
 
         log.msg("substantiating slave %s" % (self,))
-        d = self.substantiate()
+        d = self.substantiate(build)
         def substantiation_failed(f):
             builder_status.addPointEvent(['removing', 'latent',
                                           self.slave.slavename])
@@ -269,9 +251,9 @@ class LatentSlaveBuilder(AbstractSlaveBuilder):
         d.addErrback(substantiation_failed)
         return d
 
-    def substantiate(self):
+    def substantiate(self, build):
         self.state = SUBSTANTIATING
-        d = self.slave.substantiate(self)
+        d = self.slave.substantiate(self, build)
         if not self.slave.substantiated:
             event = self.builder.builder_status.addEvent(
                 ["substantiating"])
@@ -299,10 +281,6 @@ class LatentSlaveBuilder(AbstractSlaveBuilder):
     def buildStarted(self):
         AbstractSlaveBuilder.buildStarted(self)
         self.slave.buildStarted(self)
-
-    def buildFinished(self):
-        AbstractSlaveBuilder.buildFinished(self)
-        self.slave.buildFinished(self)
 
     def _attachFailure(self, why, where):
         self.state = LATENT

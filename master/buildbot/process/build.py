@@ -22,7 +22,7 @@ from twisted.python.failure import Failure
 from twisted.internet import reactor, defer, error
 
 from buildbot import interfaces, locks
-from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE, EXCEPTION, \
+from buildbot.status.results import SUCCESS, WARNINGS, FAILURE, EXCEPTION, \
   RETRY, SKIPPED, worst_status
 from buildbot.status.builder import Results
 from buildbot.status.progress import BuildProgress
@@ -47,7 +47,7 @@ class Build:
     L{buildbot.process.factory.BuildFactory}
 
     @ivar requests: the list of L{BuildRequest}s that triggered me
-    @ivar build_status: the L{buildbot.status.builder.BuildStatus} that
+    @ivar build_status: the L{buildbot.status.build.BuildStatus} that
                         collects our status
     """
 
@@ -63,6 +63,7 @@ class Build:
     def __init__(self, requests):
         self.requests = requests
         self.locks = []
+
         # build a source stamp
         self.source = requests[0].mergeWith(requests[1:])
         self.reason = requests[0].mergeReasons(requests[1:])
@@ -183,6 +184,8 @@ class Build:
         # object that came from the config, and get its properties
         buildslave_properties = slavebuilder.slave.properties
         self.getProperties().updateFromProperties(buildslave_properties)
+        if slavebuilder.slave.slave_basedir:
+            self.setProperty("workdir", slavebuilder.slave.path_module.join(slavebuilder.slave.slave_basedir, self.builder.slavebuilddir), "slave")
 
         self.slavename = slavebuilder.slave.slavename
         self.build_status.setSlavename(self.slavename)
@@ -218,6 +221,7 @@ class Build:
                        for l, la in self.locks]
         self.remote = slavebuilder.remote
         self.remote.notifyOnDisconnect(self.lostRemote)
+
         d = self.deferred = defer.Deferred()
         def _release_slave(res, slave, bs):
             self.slavebuilder.buildFinished()
@@ -348,13 +352,12 @@ class Build:
         """This method is called to obtain the next BuildStep for this build.
         When it returns None (or raises a StopIteration exception), the build
         is complete."""
-        if self.stopped:
-            return None
         if not self.steps:
             return None
         if not self.remote:
             return None
-        if self.terminate:
+        if self.terminate or self.stopped:
+            # Run any remaining alwaysRun steps, and skip over the others
             while True:
                 s = self.steps.pop(0)
                 if s.alwaysRun:

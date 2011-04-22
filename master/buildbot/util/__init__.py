@@ -15,6 +15,8 @@
 
 
 import time, re, string
+import datetime
+import calendar
 from twisted.python import threadable
 from buildbot.util.misc import deferredLocked, SerializedInvocation
 
@@ -92,7 +94,10 @@ class ComparableMixin:
         if result:
             return result
 
-        assert self.compare_attrs == them.compare_attrs
+        result = cmp(self.compare_attrs, them.compare_attrs)
+        if result:
+            return result
+
         self_list = [getattr(self, name, self._None)
                      for name in self.compare_attrs]
         them_list = [getattr(them, name, self._None)
@@ -154,14 +159,17 @@ def none_or_str(x):
         return str(x)
     return x
 
-# place a working json module at 'buildbot.util.json'.  Code is from
+# place a working json module at 'buildbot.util.json'.  Code is adapted from
 # Paul Wise <pabs@debian.org>:
 #   http://lists.debian.org/debian-python/2010/02/msg00016.html
+# json doesn't exist as a standard module until python2.6
+# However python2.6's json module is much slower than simplejson, so we prefer
+# to use simplejson if available.
 try:
-    import json # python 2.6
+    import simplejson as json
     assert json
 except ImportError:
-    import simplejson as json # python 2.4 to 2.5
+    import json # python 2.6 or 2.7
 try:
     _tmp = json.loads
 except AttributeError:
@@ -179,7 +187,29 @@ class NotABranch:
         return False
 NotABranch = NotABranch()
 
+# time-handling methods
+
+class UTC(datetime.tzinfo):
+    """Simple definition of UTC timezone"""
+    def utcoffset(self, dt):
+        return datetime.timedelta(0)
+
+    def dst(self, dt):
+        return datetime.timedelta(0)
+
+    def tzname(self):
+        return "UTC"
+UTC = UTC()
+
+def epoch2datetime(epoch):
+    """Convert a UNIX epoch time to a datetime object, in the UTC timezone"""
+    return datetime.datetime.fromtimestamp(epoch, tz=UTC)
+
+def datetime2epoch(dt):
+    """Convert a non-naive datetime object to a UNIX epoch timestamp"""
+    return calendar.timegm(dt.utctimetuple())
+
 __all__ = [
     'naturalSort', 'now', 'formatInterval', 'ComparableMixin', 'json',
     'safeTranslate', 'remove_userpassword', 'LRUCache', 'none_or_str',
-    'NotABranch', 'deferredLocked', 'SerializedInvocation' ]
+    'NotABranch', 'deferredLocked', 'SerializedInvocation', 'UTC' ]

@@ -21,8 +21,9 @@ from zope.interface import Interface
 from twisted.internet import defer
 from twisted.web import resource, static, server
 from twisted.python import log
-from buildbot.status import builder
-from buildbot.status.builder import SUCCESS, WARNINGS, FAILURE, SKIPPED, EXCEPTION, RETRY
+from buildbot.status import builder, buildstep, build
+from buildbot.status.results import SUCCESS, WARNINGS, FAILURE, SKIPPED
+from buildbot.status.results import EXCEPTION, RETRY
 from buildbot import version, util
 from buildbot.process.properties import Properties
 
@@ -89,10 +90,9 @@ def build_get_class(b):
     """
     # FIXME: this getResults duplicity might need to be fixed
     result = b.getResults()
-    #print "THOMAS: result for b %r: %r" % (b, result)
-    if isinstance(b, builder.BuildStatus):
+    if isinstance(b, build.BuildStatus):
         result = b.getResults()
-    elif isinstance(b, builder.BuildStepStatus):
+    elif isinstance(b, buildstep.BuildStepStatus):
         result = b.getResults()[0]
         # after forcing a build, b.getResults() returns ((None, []), []), ugh
         if isinstance(result, tuple):
