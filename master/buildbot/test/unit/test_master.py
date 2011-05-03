@@ -60,18 +60,18 @@ class Subscriptions(dirs.DirsMixin, unittest.TestCase):
     def test_buildset_subscription(self):
         self.master.db = mock.Mock()
         self.master.db.buildsets.addBuildset.return_value = \
-            defer.succeed(938593)
+            defer.succeed((938593, dict(a=19,b=20)))
 
         cb = mock.Mock()
         sub = self.master.subscribeToBuildsets(cb)
         self.assertIsInstance(sub, subscription.Subscription)
 
         d = self.master.addBuildset(ssid=999)
-        def check(bsid):
+        def check((bsid,brids)):
             # master called the right thing in the db component
             self.master.db.buildsets.addBuildset.assert_called_with(ssid=999)
             # addBuildset returned the right value
-            self.failUnless(bsid == 938593)
+            self.assertEqual((bsid,brids), (938593, dict(a=19,b=20)))
             # and the notification sub was called correctly
             cb.assert_called_with(bsid=938593, ssid=999)
         d.addCallback(check)
@@ -84,7 +84,7 @@ class Subscriptions(dirs.DirsMixin, unittest.TestCase):
         sub = self.master.subscribeToBuildsetCompletions(cb)
         self.assertIsInstance(sub, subscription.Subscription)
 
-        self.master.buildsetComplete(938593, 999)
+        self.master._buildsetComplete(938593, 999)
         # assert the notification sub was called correctly
         cb.assert_called_with(938593, 999)
 
@@ -130,8 +130,8 @@ class Polling(dirs.DirsMixin, unittest.TestCase):
     def deliverBuildsetCompletion(self, bsid, result):
         self.gotten_buildset_completions.append((bsid, result))
 
-    def deliverBuildRequestAddition(self, **kwargs):
-        self.gotten_buildrequest_additions.append(kwargs)
+    def deliverBuildRequestAddition(self, notif):
+        self.gotten_buildrequest_additions.append(notif)
 
     # tests
 
@@ -221,8 +221,8 @@ class Polling(dirs.DirsMixin, unittest.TestCase):
         d = self.master.pollDatabaseBuildRequests()
         def check(_):
             self.assertEqual(sorted(self.gotten_buildrequest_additions),
-                    sorted([dict(bsid=99, buildername='9teen'),
-                            dict(bsid=99, buildername='twenty')]))
+                    sorted([dict(bsid=99, brid=19, buildername='9teen'),
+                            dict(bsid=99, brid=20, buildername='twenty')]))
         d.addCallback(check)
         return d
 
@@ -255,11 +255,11 @@ class Polling(dirs.DirsMixin, unittest.TestCase):
         d.addCallback(lambda _ : self.master.pollDatabaseBuildRequests())
         def check(_):
             self.assertEqual(self.gotten_buildrequest_additions, [
-                dict(bsid=9, buildername='eleventy'),
+                dict(bsid=9, brid=11, buildername='eleventy'),
                 'MARK',
-                dict(bsid=9, buildername='twenty'),
+                dict(bsid=9, brid=20, buildername='twenty'),
                 'MARK',
-                dict(bsid=9, buildername='eleventy'),
+                dict(bsid=9, brid=11, buildername='eleventy'),
             ])
         d.addCallback(check)
         return d

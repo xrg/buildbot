@@ -40,6 +40,7 @@ from buildbot.schedulers.manager import SchedulerManager
 from buildbot.schedulers.base import isScheduler
 from buildbot.process.botmaster import BotMaster
 from buildbot.process import debug
+from buildbot.status.results import SUCCESS, WARNINGS, FAILURE
 
 ########################################
 
@@ -55,8 +56,8 @@ class BuildMaster(service.MultiService):
     debug = 0
     manhole = None
     debugPassword = None
-    projectName = "(unspecified)"
-    projectURL = None
+    title = "(unspecified)"
+    titleURL = None
     buildbotURL = None
     change_svc = None
     properties = Properties()
@@ -108,7 +109,6 @@ class BuildMaster(service.MultiService):
 
         self.debugClientRegistration = None
 
-        self.status = Status(self)
         self.statusTargets = []
 
         self.db = None
@@ -132,6 +132,10 @@ class BuildMaster(service.MultiService):
                 subscription.SubscriptionPoint("buildset_additions")
         self._complete_buildset_subs = \
                 subscription.SubscriptionPoint("buildset_completion")
+
+        # set up the tip of the status hierarchy (must occur after subscription
+        # points are initialized)
+        self.status = Status(self)
 
     def startService(self):
         service.MultiService.startService(self)
@@ -219,6 +223,7 @@ class BuildMaster(service.MultiService):
                           "schedulers", "builders", "mergeRequests",
                           "slavePortnum", "debugPassword", "logCompressionLimit",
                           "manhole", "status", "projectName", "projectURL",
+                          "title", "titleURL",
                           "buildbotURL", "properties", "prioritizeBuilders",
                           "eventHorizon", "buildCacheSize", "changeCacheSize",
                           "logHorizon", "buildHorizon", "changeHorizon",
@@ -245,8 +250,10 @@ class BuildMaster(service.MultiService):
                 debugPassword = config.get('debugPassword')
                 manhole = config.get('manhole')
                 status = config.get('status', [])
-                projectName = config.get('projectName')
-                projectURL = config.get('projectURL')
+                # projectName/projectURL still supported to avoid
+                # breaking legacy configurations
+                title = config.get('title', config.get('projectName'))
+                titleURL = config.get('titleURL', config.get('projectURL'))
                 buildbotURL = config.get('buildbotURL')
                 properties = config.get('properties', {})
                 buildCacheSize = config.get('buildCacheSize', None)
@@ -445,8 +452,8 @@ class BuildMaster(service.MultiService):
             if checkOnly:
                 return
 
-            self.projectName = projectName
-            self.projectURL = projectURL
+            self.title = title
+            self.titleURL = titleURL
             self.buildbotURL = buildbotURL
 
             self.properties = Properties()
@@ -532,9 +539,6 @@ class BuildMaster(service.MultiService):
 
         self.db = connector.db_connector(self, db_url, self.basedir)
         self.db.setServiceParent(self)
-        if self.changeCacheSize:
-            pass # TODO: set this in self.db.changes, or in self.config?
-        self.db.start()
 
         # make sure it's up to date
         d = self.db.model.is_current()
@@ -554,9 +558,6 @@ class BuildMaster(service.MultiService):
 
         # set up the stuff that depends on the db
         def set_up_db_dependents(r):
-            # TODO: this needs to go
-            self.status.setDB(self.db)
-
             # subscribe the various parts of the system to changes
             self._change_subs.subscribe(self.status.changeAdded)
 
@@ -754,15 +755,16 @@ class BuildMaster(service.MultiService):
         resulting builds.
         """
         d = self.db.buildsets.addBuildset(**kwargs)
-        def notify(bsid):
+        def notify((bsid,brids)):
             log.msg("added buildset %d to database" % bsid)
             # note that buildset additions are only reported on this master
             self._new_buildset_subs.deliver(bsid=bsid, **kwargs)
             # only deliver messages immediately if we're not polling
             if not self.db_poll_interval:
-                for bn in kwargs.get('builderNames', []):
-                    self.buildRequestAdded(bsid=bsid, buildername=bn)
-            return bsid
+                for bn, brid in brids.iteritems():
+                    self.buildRequestAdded(bsid=bsid, brid=brid,
+                                           buildername=bn)
+            return (bsid,brids)
         d.addCallback(notify)
         return d
 
@@ -780,13 +782,46 @@ class BuildMaster(service.MultiService):
         """
         return self._new_buildset_subs.subscribe(callback)
 
-    def buildsetComplete(self, bsid, result):
+    @defer.deferredGenerator
+    def maybeBuildsetComplete(self, bsid):
         """
-        Notifies the master that the given buildset with ID C{bsid} is
-        complete, with result C{result}.
+        Instructs the master to check whether the buildset is complete,
+        and notify appropriately if it is.
+
+        Note that buildset completions are only reported on the master
+        on which the last build request completes.
         """
-        # note that buildset completions are only reported on this master
-        self._complete_buildset_subs.deliver(bsid, result)
+        wfd = defer.waitForDeferred(
+            self.db.buildrequests.getBuildRequests(bsid=bsid, complete=False))
+        yield wfd
+        brdicts = wfd.getResult()
+
+        # if there are incomplete buildrequests, bail out
+        if brdicts:
+            return
+
+        wfd = defer.waitForDeferred(
+            self.db.buildrequests.getBuildRequests(bsid=bsid))
+        yield wfd
+        brdicts = wfd.getResult()
+
+        # figure out the overall results of the buildset
+        cumulative_results = SUCCESS
+        for brdict in brdicts:
+            if brdict['results'] not in (SUCCESS, WARNINGS):
+                cumulative_results = FAILURE
+
+        # mark it as completed in the database
+        wfd = defer.waitForDeferred(
+            self.db.buildsets.completeBuildset(bsid, cumulative_results))
+        yield wfd
+        wfd.getResult()
+
+        # and deliver to any listeners
+        self._buildsetComplete(bsid, cumulative_results)
+
+    def _buildsetComplete(self, bsid, results):
+        self._complete_buildset_subs.deliver(bsid, results)
 
     def subscribeToBuildsetCompletions(self, callback):
         """
@@ -797,25 +832,26 @@ class BuildMaster(service.MultiService):
         """
         return self._complete_buildset_subs.subscribe(callback)
 
-    def buildRequestAdded(self, bsid, buildername):
+    def buildRequestAdded(self, bsid, brid, buildername):
         """
         Notifies the master that a build request is available to be claimed;
         this may be a brand new build request, or a build request that was
         previously claimed and unclaimed through a timeout or other calamity.
 
         @param bsid: containing buildset id
+        @param brid: buildrequest ID
         @param buildername: builder named by the build request
         """
-        self._new_buildrequest_subs.deliver(bsid=bsid,
-                                            buildername=buildername)
+        self._new_buildrequest_subs.deliver(
+                dict(bsid=bsid, brid=brid, buildername=buildername))
 
     def subscribeToBuildRequests(self, callback):
         """
-        Request that C{callback} be invoked with keyword parameters C{bsid}
-        (buildset id) and C{buildername} whenever a new build request is added
-        to the database.  Note that, due to the delayed nature of
-        subscriptions, the build request may already be claimed by the time
-        C{callback} is invoked.
+        Request that C{callback} be invoked with a dictionary with keys C{brid}
+        (the build request id), C{bsid} (buildset id) and C{buildername}
+        whenever a new build request is added to the database.  Note that, due
+        to the delayed nature of subscriptions, the build request may already
+        be claimed by the time C{callback} is invoked.
 
         Note: this method will go away in 0.9.x
         """
@@ -957,7 +993,8 @@ class BuildMaster(service.MultiService):
             brdicts = dict((brd['brid'], brd) for brd in now_unclaimed_brdicts)
             for brid in new_unclaimed:
                 brd = brdicts[brid]
-                self.buildRequestAdded(brd['buildsetid'], brd['buildername'])
+                self.buildRequestAdded(brd['buildsetid'], brd['brid'],
+                                       brd['buildername'])
 
     ## state maintenance (private)
 

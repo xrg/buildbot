@@ -43,9 +43,16 @@ class Status:
         self.logMaxSize = None
         self.logMaxTailSize = None
 
+        # subscribe to the things we need to know about
+        self.master.subscribeToBuildsetCompletions(
+                self._buildsetCompletionCallback)
+        self.master.subscribeToBuildsets(
+                self._buildsetCallback)
+        self.master.subscribeToBuildRequests(
+                self._buildRequestCallback)
+
         self._builder_observers = collections.KeyedSets()
         self._buildreq_observers = collections.KeyedSets()
-        self._buildset_success_waiters = collections.KeyedSets()
         self._buildset_finished_waiters = collections.KeyedSets()
 
     @property
@@ -58,21 +65,12 @@ class Status:
     def cancelCleanShutdown(self):
         return self.botmaster.cancelCleanShutdown()
 
-    def setDB(self, db):
-        self.db = self.master.db
-        # XXX not called anymore - what to do about this?
-        self.db.subscribe_to("add-build", self._db_builds_changed)
-        self.db.subscribe_to("add-buildset", self._db_buildset_added)
-        self.db.subscribe_to("modify-buildset", self._db_buildsets_changed)
-        self.db.subscribe_to("add-buildrequest", self._db_buildrequest_added)
-        self.db.subscribe_to("cancel-buildrequest", self._db_buildrequest_cancelled)
-
     # methods called by our clients
 
-    def getProjectName(self):
-        return self.master.projectName
-    def getProjectURL(self):
-        return self.master.projectURL
+    def getTitle(self):
+        return self.master.title
+    def getTitleURL(self):
+        return self.master.titleURL
     def getBuildbotURL(self):
         return self.master.buildbotURL
 
@@ -168,10 +166,9 @@ class Status:
         return self.botmaster.slaves[slavename].slave_status
 
     def getBuildSets(self):
-        d = self.master.db.buildsets.getBuildSets(complete=False)
+        d = self.master.db.buildsets.getBuildsets(complete=False)
         def make_status_objects(bsdicts):
-            return [ buildset.BuildSetStatus(bsdict['bsid'], self,
-                                             self.master.db)
+            return [ buildset.BuildSetStatus(bsdict, self)
                     for bsdict in bsdicts ]
         d.addCallback(make_status_objects)
         return d
@@ -327,8 +324,8 @@ class Status:
     def asDict(self):
         result = {}
         # Constant
-        result['projectName'] = self.getProjectName()
-        result['projectURL'] = self.getProjectURL()
+        result['title'] = self.getTitle()
+        result['titleURL'] = self.getTitleURL()
         result['buildbotURL'] = self.getBuildbotURL()
         # TODO: self.getSchedulers()
         # self.getChangeSources()
@@ -340,11 +337,7 @@ class Status:
             # r.bsid: check for completion, notify subscribers, unsubscribe
             pass
 
-    def get_buildreq_for_id(self, brid):
-        return buildrequest.BuildRequestStatus(brid, self, self.db)
-
-    def _db_builds_changed(self, category, bid):
-        brid,buildername,buildnum = self.db.get_build_info(bid)
+    def build_started(self, brid, buildername, buildnum):
         if brid in self._buildreq_observers:
             bs = self.getBuilder(buildername).getBuild(buildnum)
             if bs:
@@ -357,42 +350,25 @@ class Status:
     def _buildrequest_unsubscribe(self, brid, observer):
         self._buildreq_observers.discard(brid, observer)
 
-    def _db_buildset_added(self, category, bsid):
-        bss = buildset.BuildSetStatus(bsid, self, self.db)
-        for t in self.watchers:
-            if hasattr(t, 'buildsetSubmitted'):
-                t.buildsetSubmitted(bss)
-
-    def _buildset_waitUntilSuccess(self, bsid):
-        d = defer.Deferred()
-        self._buildset_success_waiters.add(bsid, d)
-        # now check for a buildset which was already successful
-        self._db_buildsets_changed("modify-buildset", bsid)
-        return d
     def _buildset_waitUntilFinished(self, bsid):
         d = defer.Deferred()
         self._buildset_finished_waiters.add(bsid, d)
-        self._db_buildsets_changed("modify-buildset", bsid)
+        self._maybeBuildsetFinished(bsid)
         return d
 
-    def _db_buildsets_changed(self, category, *bsids):
-        for bsid in bsids:
-            self._db_buildset_changed(bsid)
-
-    def _db_buildset_changed(self, bsid):
+    def _maybeBuildsetFinished(self, bsid):
         # check bsid to see if it's successful or finished, and notify anyone
         # who cares
-        if (bsid not in self._buildset_success_waiters
-            and bsid not in self._buildset_finished_waiters):
+        if bsid not in self._buildset_finished_waiters:
             return
-        successful,finished = self.db.examine_buildset(bsid)
-        bss = buildset.BuildSetStatus(bsid, self, self.db)
-        if successful is not None:
-            for d in self._buildset_success_waiters.pop(bsid):
-                eventually(d.callback, bss)
-        if finished:
-            for d in self._buildset_finished_waiters.pop(bsid):
-                eventually(d.callback, bss)
+        d = self.master.db.buildsets.getBuildset(bsid)
+        def do_notifies(bsdict):
+            bss = buildset.BuildSetStatus(bsdict, self)
+            if bss.isFinished():
+                for d in self._buildset_finished_waiters.pop(bsid):
+                    eventually(d.callback, bss)
+        d.addCallback(do_notifies)
+        d.addErrback(log.err, 'while notifying for buildset finishes')
 
     def _builder_subscribe(self, buildername, watcher):
         # should get requestSubmitted and requestCancelled
@@ -401,21 +377,25 @@ class Status:
     def _builder_unsubscribe(self, buildername, watcher):
         self._builder_observers.discard(buildername, watcher)
 
-    def _db_buildrequest_added(self, category, *brids):
-        self._handle_buildrequest_event("added", brids)
-    def _db_buildrequest_cancelled(self, category, *brids):
-        self._handle_buildrequest_event("cancelled", brids)
-    def _handle_buildrequest_event(self, mode, brids):
-        for brid in brids:
-            buildername = self.db.get_buildername_for_brid(brid)
-            if buildername in self._builder_observers:
-                brs = buildrequest.BuildRequestStatus(brid, self, self.db)
-                for observer in self._builder_observers[buildername]:
-                    if mode == "added":
-                        if hasattr(observer, 'requestSubmitted'):
-                            eventually(observer.requestSubmitted, brs)
-                    else:
-                        if hasattr(observer, 'requestCancelled'):
-                            builder = self.getBuilder(buildername)
-                            eventually(observer.requestCancelled, builder, brs)
+    def _buildsetCallback(self, **kwargs):
+        bsid = kwargs['bsid']
+        d = self.master.db.buildsets.getBuildset(bsid)
+        def do_notifies(bsdict):
+            bss = buildset.BuildSetStatus(bsdict, self)
+            for t in self.watchers:
+                if hasattr(t, 'buildsetSubmitted'):
+                    t.buildsetSubmitted(bss)
+        d.addCallback(do_notifies)
+        d.addErrback(log.err, 'while notifying buildsetSubmitted')
 
+    def _buildsetCompletionCallback(self, bsid, result):
+        self._maybeBuildsetFinished(bsid)
+
+    def _buildRequestCallback(self, notif):
+        buildername = notif['buildername']
+        if buildername in self._builder_observers:
+            brs = buildrequest.BuildRequestStatus(buildername,
+                                                notif['brid'], self)
+            for observer in self._builder_observers[buildername]:
+                if hasattr(observer, 'requestSubmitted'):
+                    eventually(observer.requestSubmitted, brs)

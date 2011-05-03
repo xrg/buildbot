@@ -218,7 +218,7 @@ class AbstractBuildSlave(pb.Avatar, service.MultiService):
 
         buildmaster = self.botmaster.parent
         status = buildmaster.getStatus()
-        text = "The Buildbot working for '%s'\n" % status.getProjectName()
+        text = "The Buildbot working for '%s'\n" % status.getTitle()
         text += ("has noticed that the buildslave named %s went away\n" %
                  self.slavename)
         text += "\n"
@@ -230,7 +230,7 @@ class AbstractBuildSlave(pb.Avatar, service.MultiService):
         text += "\n"
         text += "Sincerely,\n"
         text += " The Buildbot\n"
-        text += " %s\n" % status.getProjectURL()
+        text += " %s\n" % status.getTitleURL()
         subject = "Buildbot: buildslave %s was lost" % self.slavename
         return self._mail_missing_message(subject, text)
 
@@ -636,6 +636,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
 
     substantiated = False
     substantiation_deferred = None
+    substantiation_build = None
     build_wait_timer = None
     _shutdown_callback_handle = None
 
@@ -672,6 +673,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
                     self.missing_timeout,
                     self._substantiation_failed, defer.TimeoutError())
             self.substantiation_deferred = defer.Deferred()
+            self.substantiation_build = build
             if self.slave is None:
                 d = self._substantiate(build) # start up instance
                 d.addErrback(log.err, "while substantiating")
@@ -716,7 +718,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
     def detached(self, mind):
         AbstractBuildSlave.detached(self, mind)
         if self.substantiation_deferred is not None:
-            d = self._substantiate()
+            d = self._substantiate(self.substantiation_build)
             d.addErrback(log.err, 'while re-substantiating')
 
     def _substantiation_failed(self, failure):
@@ -724,6 +726,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
         if self.substantiation_deferred:
             d = self.substantiation_deferred
             self.substantiation_deferred = None
+            self.substantiation_build = None
             d.errback(failure)
         self.insubstantiate()
         # notify people, but only if we're still in the config
@@ -732,7 +735,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
 
         buildmaster = self.botmaster.parent
         status = buildmaster.getStatus()
-        text = "The Buildbot working for '%s'\n" % status.getProjectName()
+        text = "The Buildbot working for '%s'\n" % status.getTitle()
         text += ("has noticed that the latent buildslave named %s \n" %
                  self.slavename)
         text += "never substantiated after a request\n"
@@ -742,7 +745,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
         text += "\n"
         text += "Sincerely,\n"
         text += " The Buildbot\n"
-        text += " %s\n" % status.getProjectURL()
+        text += " %s\n" % status.getTitleURL()
         subject = "Buildbot: buildslave %s never substantiated" % self.slavename
         return self._mail_missing_message(subject, text)
 
@@ -802,6 +805,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
                 # request to "go away".
                 d = self.substantiation_deferred
                 self.substantiation_deferred = None
+                self.substantiation_build = None
                 d.errback(failure.Failure(
                     RuntimeError("soft disconnect aborted substantiation")))
                 if self.missing_timer:
@@ -860,6 +864,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
             if self.substantiation_deferred:
                 d = self.substantiation_deferred
                 self.substantiation_deferred = None
+                self.substantiation_build = None
                 d.errback(why)
             if self.missing_timer:
                 self.missing_timer.cancel()
@@ -876,6 +881,7 @@ class AbstractLatentBuildSlave(AbstractBuildSlave):
                 log.msg("Firing %s substantiation deferred with success" % self.slavename)
                 d = self.substantiation_deferred
                 self.substantiation_deferred = None
+                self.substantiation_build = None
                 d.callback(True)
             # note that the missing_timer is already handled within
             # ``attached``

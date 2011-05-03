@@ -26,6 +26,10 @@ class TestBuildsetsConnectorComponent(
             unittest.TestCase):
 
     def setUp(self):
+        self.now = 9272359
+        self.clock = task.Clock()
+        self.clock.advance(self.now)
+
         d = self.setUpConnectorComponent(
             table_names=[ 'patches', 'changes', 'sourcestamp_changes',
                 'buildsets', 'buildset_properties', 'schedulers',
@@ -48,35 +52,35 @@ class TestBuildsetsConnectorComponent(
     # tests
 
     def test_addBuildset_simple(self):
-        now = 9272359
-        clock = task.Clock()
-        clock.advance(now)
-
         d = defer.succeed(None)
         d.addCallback(lambda _ :
             self.db.buildsets.addBuildset(ssid=234, reason='because',
                 properties={}, builderNames=['bldr'], external_idstring='extid',
-                _reactor=clock))
-        def check(bsid):
+                _reactor=self.clock))
+        def check((bsid, brids)):
             def thd(conn):
+                # we should only have one brid
+                self.assertEqual(len(brids), 1)
+
                 # should see one buildset row
                 r = conn.execute(self.db.model.buildsets.select())
                 rows = [ (row.id, row.external_idstring, row.reason,
                           row.sourcestampid, row.complete, row.complete_at,
                           row.submitted_at, row.results) for row in r.fetchall() ]
                 self.assertEqual(rows,
-                    [ ( bsid, 'extid', 'because', 234, 0, None, now, -1) ])
+                    [ ( bsid, 'extid', 'because', 234, 0, None, self.now, -1) ])
 
                 # and one buildrequests row
                 r = conn.execute(self.db.model.buildrequests.select())
-                rows = [ (row.buildsetid, row.buildername, row.priority,
-                          row.claimed_at, row.claimed_by_name,
-                          row.claimed_by_incarnation, row.complete, row.results,
-                          row.submitted_at, row.complete_at)
+
+                rows = [ (row.buildsetid, row.id, row.buildername,
+                    row.priority, row.claimed_at, row.claimed_by_name,
+                    row.claimed_by_incarnation, row.complete, row.results,
+                    row.submitted_at, row.complete_at)
                           for row in r.fetchall() ]
                 self.assertEqual(rows,
-                    [ ( bsid, 'bldr', 0, 0, None, None, 0,
-                        -1, now, None) ])
+                    [ ( bsid, brids['bldr'], 'bldr', 0, 0, None, None, 0,
+                        -1, self.now, None) ])
             return self.db.pool.do(thd)
         d.addCallback(check)
         return d
@@ -87,8 +91,10 @@ class TestBuildsetsConnectorComponent(
         d.addCallback(lambda _ :
             self.db.buildsets.addBuildset(ssid=234, reason='because',
                                 properties=props, builderNames=['a', 'b']))
-        def check(bsid):
+        def check((bsid, brids)):
             def thd(conn):
+                self.assertEqual(len(brids), 2)
+
                 # should see one buildset row
                 r = conn.execute(self.db.model.buildsets.select())
                 rows = [ (row.id, row.external_idstring, row.reason,
@@ -107,10 +113,13 @@ class TestBuildsetsConnectorComponent(
 
                 # and two buildrequests rows (and don't re-check the default columns)
                 r = conn.execute(self.db.model.buildrequests.select())
-                rows = [ (row.buildsetid, row.buildername)
+                rows = [ (row.buildsetid, row.id, row.buildername)
                           for row in r.fetchall() ]
+
+                # we don't know which of the brids is assigned to which
+                # buildername, but either one will do
                 self.assertEqual(sorted(rows),
-                    [ ( bsid, 'a'), (bsid, 'b') ])
+                    [ ( bsid, brids['a'], 'a'), (bsid, brids['b'], 'b') ])
             return self.db.pool.do(thd)
         d.addCallback(check)
         return d
@@ -386,5 +395,49 @@ class TestBuildsetsConnectorComponent(
                 complete=False, results=-1, bsid=91),
             ])
         d.addCallback(check)
+        return d
+
+    def test_completeBuildset(self):
+        d = self.insert_test_getBuildsets_data()
+        d.addCallback(lambda _ :
+                self.db.buildsets.completeBuildset(bsid=91, results=6,
+                                                   _reactor=self.clock))
+        def check(_):
+            def thd(conn):
+                # should see one buildset row
+                r = conn.execute(self.db.model.buildsets.select())
+                rows = [ (row.id, row.complete, row.complete_at, row.results)
+                         for row in r.fetchall() ]
+                self.assertEqual(sorted(rows), sorted([
+                    ( 91, 1, self.now, 6),
+                    ( 92, 1, 298297876, 7) ]))
+            return self.db.pool.do(thd)
+        d.addCallback(check)
+        return d
+
+    def test_completeBuildset_already_completed(self):
+        d = self.insert_test_getBuildsets_data()
+        d.addCallback(lambda _ :
+                self.db.buildsets.completeBuildset(bsid=92, results=6,
+                                                   _reactor=self.clock))
+        def cb(_):
+            self.fail("should not succeed")
+        def eb(f):
+            f.trap(KeyError)
+            # pass
+        d.addCallbacks(cb, eb)
+        return d
+
+    def test_completeBuildset_missing(self):
+        d = self.insert_test_getBuildsets_data()
+        d.addCallback(lambda _ :
+                self.db.buildsets.completeBuildset(bsid=93, results=6,
+                                                   _reactor=self.clock))
+        def cb(_):
+            self.fail("should not succeed")
+        def eb(f):
+            f.trap(KeyError)
+            # pass
+        d.addCallbacks(cb, eb)
         return d
 
