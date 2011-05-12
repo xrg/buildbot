@@ -17,6 +17,7 @@
 from zope.interface import implements
 from twisted.persisted import styles
 from twisted.internet import defer
+from buildbot.changes.changes import Change
 from buildbot import util, interfaces
 
 # TODO: kill this class, or at least make it less significant
@@ -83,7 +84,7 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
 
         @returns: L{SourceStamp} via Deferred
         """
-        sourcestamp = cls(fromSsdict=True)
+        sourcestamp = cls(_fromSsdict=True)
         sourcestamp.ssid = ssdict['ssid']
         sourcestamp.branch = ssdict['branch']
         sourcestamp.revision = ssdict['revision']
@@ -96,8 +97,12 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
             sourcestamp.patch = (ssdict['patch_level'], ssdict['patch_body'])
 
         if ssdict['changeids']:
-            getChangeInstance = master.db.changes.getChangeInstance
-            d = defer.gatherResults([ getChangeInstance(id)
+            def gci(id):
+                d = master.db.changes.getChange(id)
+                d.addCallback(lambda chdict :
+                    Change.fromChdict(master, chdict))
+                return d
+            d = defer.gatherResults([ gci(id)
                                 for id in ssdict['changeids'] ])
         else:
             d = defer.succeed([])
@@ -108,9 +113,10 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
         return d
 
     def __init__(self, branch=None, revision=None, patch=None,
-                 changes=None, project='', repository='', fromSsdict=False):
+                 changes=None, project='', repository='', _fromSsdict=False,
+                 _ignoreChanges=False):
         # skip all this madness if we're being built from the database
-        if fromSsdict:
+        if _fromSsdict:
             return
 
         if patch is not None:
@@ -120,7 +126,7 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
         self.patch = patch
         self.project = project or ''
         self.repository = repository or ''
-        if changes:
+        if changes and not _ignoreChanges:
             self.changes = tuple(changes)
             # set branch and revision to most recent change
             self.branch = changes[-1].branch
@@ -187,7 +193,8 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
     def getAbsoluteSourceStamp(self, got_revision):
         return SourceStamp(branch=self.branch, revision=got_revision,
                            patch=self.patch, repository=self.repository,
-                           project=self.project, changes=self.changes)
+                           project=self.project, changes=self.changes,
+                           _ignoreChanges=True)
 
     def getText(self):
         # note: this won't work for VC systems with huge 'revision' strings
@@ -243,7 +250,7 @@ class SourceStamp(util.ComparableMixin, styles.Versioned):
         patch_level = None
         if self.patch:
             patch_level, patch_body = self.patch
-        d = master.db.sourcestamps.createSourceStamp(
+        d = master.db.sourcestamps.addSourceStamp(
                 branch=self.branch, revision=self.revision,
                 repository=self.repository, project=self.project,
                 patch_body=patch_body, patch_level=patch_level,
