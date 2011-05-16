@@ -15,7 +15,7 @@
 
 from twisted.trial import unittest
 
-from buildbot.process.properties import PropertyMap, Properties, WithProperties
+from buildbot.process.properties import PropertyMap, Properties, WithProperties, Property
 
 class FakeProperties(object):
     def __init__(self, **kwargs):
@@ -391,3 +391,68 @@ class TestProperties(unittest.TestCase):
         self.failUnlessEqual(self.props.getPropertySource('x'), 'old')
 
     # render() is pretty well tested by TestWithProperties, above
+
+class TestProperty(unittest.TestCase):
+    def setUp(self):
+        self.props = Properties()
+
+    def testIntProperty(self):
+        self.props.setProperty("do-tests", 1, "scheduler")
+        value = Property("do-tests")
+
+        self.failUnlessEqual(self.props.render(value),
+                1)
+
+    def testStringProperty(self):
+        self.props.setProperty("do-tests", "string", "scheduler")
+        value = Property("do-tests")
+
+        self.failUnlessEqual(self.props.render(value),
+                "string")
+
+    def testMissingProperty(self):
+        value = Property("do-tests")
+
+        self.failUnlessEqual(self.props.render(value),
+                None)
+
+    def testDefaultValue(self):
+        value = Property("do-tests", default="Hello!")
+
+        self.failUnlessEqual(self.props.render(value),
+                "Hello!")
+
+    def testIgnoreDefaultValue(self):
+        self.props.setProperty("do-tests", "string", "scheduler")
+        value = Property("do-tests", default="Hello!")
+
+        self.failUnlessEqual(self.props.render(value),
+                "string")
+
+    def testIgnoreFalseValue(self):
+        self.props.setProperty("do-tests-string", "", "scheduler")
+        self.props.setProperty("do-tests-int", 0, "scheduler")
+        self.props.setProperty("do-tests-list", [], "scheduler")
+        self.props.setProperty("do-tests-None", None, "scheduler")
+
+        value = [ Property("do-tests-string", default="Hello!"),
+                  Property("do-tests-int", default="Hello!"),
+                  Property("do-tests-list", default="Hello!"),
+                  Property("do-tests-None", default="Hello!") ]
+
+        self.failUnlessEqual(self.props.render(value),
+                ["Hello!"] * 4)
+
+    def testDefaultWhenFalse(self):
+        self.props.setProperty("do-tests-string", "", "scheduler")
+        self.props.setProperty("do-tests-int", 0, "scheduler")
+        self.props.setProperty("do-tests-list", [], "scheduler")
+        self.props.setProperty("do-tests-None", None, "scheduler")
+
+        value = [ Property("do-tests-string", default="Hello!", defaultWhenFalse=False),
+                  Property("do-tests-int", default="Hello!", defaultWhenFalse=False),
+                  Property("do-tests-list", default="Hello!", defaultWhenFalse=False),
+                  Property("do-tests-None", default="Hello!", defaultWhenFalse=False) ]
+
+        self.failUnlessEqual(self.props.render(value),
+                ["", 0, [], None])
