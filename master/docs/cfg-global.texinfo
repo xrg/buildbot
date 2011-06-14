@@ -11,6 +11,7 @@ The keys in this section affect the operations of the buildmaster globally.
 * Setting the PB Port for Slaves::
 * Defining Global Properties::
 * Debug Options::
+* Metrics Options::
 @end menu
 
 @node Database Specification
@@ -403,18 +404,21 @@ one uses unencrypted telnet. Two of them use a username+password
 combination to grant access, one of them uses an SSH-style
 @file{authorized_keys} file which contains a list of ssh public keys.
 
+Note that using any Manhole requires that @code{pycrypto} and @code{pyasn1} be
+installed.  These are not part of the normal Buildbot dependencies.
+
 @table @code
-@item manhole.AuthorizedKeysManhole
+@item buildbot.manhole.AuthorizedKeysManhole
 You construct this with the name of a file that contains one SSH
 public key per line, just like @file{~/.ssh/authorized_keys}. If you
 provide a non-absolute filename, it will be interpreted relative to
 the buildmaster's base directory.
 
-@item manhole.PasswordManhole
+@item buildbot.manhole.PasswordManhole
 This one accepts SSH connections but asks for a username and password
 when authenticating. It accepts only one such pair.
 
-@item manhole.TelnetManhole
+@item buildbot.manhole.TelnetManhole
 This accepts regular unencrypted telnet connections, and asks for a
 username/password pair before providing access. Because this
 username/password is transmitted in the clear, and because Manhole
@@ -447,9 +451,6 @@ To have the @code{Manhole} listen on all interfaces, use
 @code{"tcp:9999"} or simply 9999. This port specification uses
 @code{twisted.application.strports}, so you can make it listen on SSL
 or even UNIX-domain sockets if you want.
-
-Note that using any Manhole requires that the TwistedConch package be
-installed, and that you be using Twisted version 2.0 or later.
 
 The buildmaster's SSH server will use a different host key than the
 normal sshd running on a typical unix host. This will cause the ssh
@@ -501,3 +502,15 @@ data attributes of <Builder ''builder'' at 48963528>
 >>> win32 = _
 >>> win32.category = 'w32'
 @end example
+
+@node Metrics Options
+@subsection Metrics Options
+@code{c['metrics'] = dict(log_interval=10, periodic_interval=10)}
+
+@code{c['metrics']} can be a dictionary that configures various aspects of the metrics subsystem. If @code{c['metrics']} is None, then metrics collection, logging and reporting will be disabled.
+
+@code{log_interval} determines how often metrics should be logged to twistd.log. It default to 60s. If set to 0 or None, then logging of metrics will be disabled. This value can be changed via a reconfig.
+
+@code{periodic_interval} determines how often various non-event based metrics are collected, such as memory usage, uncollectable garbage, reactor delay. This defaults to 10s. If set to 0 or None, then periodic collection of this data is disabled. This value can also be changed via a reconifg.
+
+Read more about metrics in the @ref{Metrics} section of the documentation.

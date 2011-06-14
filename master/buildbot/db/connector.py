@@ -63,7 +63,7 @@ class DBConnector(service.MultiService):
 
         @returns: Deferred
         """
-        d = self.changes.pruneChanges(self.changeHorizon)
+        d = self.changes.pruneChanges(self.master.config.changeHorizon)
         d.addErrback(log.err, 'while pruning changes')
         return d
 
