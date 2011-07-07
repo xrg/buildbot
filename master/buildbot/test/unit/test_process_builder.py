@@ -19,7 +19,7 @@ from twisted.trial import unittest
 from twisted.python import failure
 from twisted.internet import defer
 from buildbot.test.fake import fakedb, fakemaster
-from buildbot.process import builder, buildrequest
+from buildbot.process import builder
 from buildbot.db import buildrequests
 from buildbot.util import epoch2datetime
 
@@ -46,6 +46,7 @@ class TestBuilderBuildCreation(unittest.TestCase):
         self.master.master_name = db.buildrequests.MASTER_NAME
         self.master.master_incarnation = db.buildrequests.MASTER_INCARNATION
         self.bldr.master = self.master
+        self.bldr.botmaster = self.master.botmaster
 
         # patch into the _startBuildsFor method
         self.builds_started = []
@@ -416,37 +417,48 @@ class TestBuilderBuildCreation(unittest.TestCase):
 
     # _getMergeRequestsFn
 
-    def do_test_getMergeRequestsFn(self, builder_param, global_param,
-                                  expected):
-        self.makeBuilder(mergeRequests=builder_param)
-        self.master.mergeRequests=global_param
-        self.assertEqual(self.bldr._getMergeRequestsFn(), expected)
+    def do_test_getMergeRequestsFn(self, builder_param=None,
+                    global_param=None, expected=0):
+        cble = lambda : None
+        builder_param = builder_param == 'callable' and cble or builder_param
+        global_param = global_param == 'callable' and cble or global_param
+
+        # omit the constructor parameter if None was given
+        if builder_param is None:
+            self.makeBuilder()
+        else:
+            self.makeBuilder(mergeRequests=builder_param)
+
+        self.master.botmaster.mergeRequests = global_param
+
+        fn = self.bldr._getMergeRequestsFn()
+
+        if fn == builder.Builder._defaultMergeRequestFn:
+            fn = "default"
+        elif fn is cble:
+            fn = 'callable'
+        self.assertEqual(fn, expected)
 
     def test_getMergeRequestsFn_defaults(self):
-        self.do_test_getMergeRequestsFn(None, None,
-                buildrequest.BuildRequest.canBeMergedWith)
+        self.do_test_getMergeRequestsFn(None, None, "default")
 
     def test_getMergeRequestsFn_global_True(self):
-        self.do_test_getMergeRequestsFn(None, True,
-                buildrequest.BuildRequest.canBeMergedWith)
+        self.do_test_getMergeRequestsFn(None, True, "default")
 
     def test_getMergeRequestsFn_global_False(self):
         self.do_test_getMergeRequestsFn(None, False, None)
 
     def test_getMergeRequestsFn_global_function(self):
-        function = lambda : None
-        self.do_test_getMergeRequestsFn(None, function, function)
+        self.do_test_getMergeRequestsFn(None, 'callable', 'callable')
 
     def test_getMergeRequestsFn_builder_True(self):
-        self.do_test_getMergeRequestsFn(True, False,
-                buildrequest.BuildRequest.canBeMergedWith)
+        self.do_test_getMergeRequestsFn(True, False, "default")
 
     def test_getMergeRequestsFn_builder_False(self):
         self.do_test_getMergeRequestsFn(False, True, None)
 
     def test_getMergeRequestsFn_builder_function(self):
-        function = lambda : None
-        self.do_test_getMergeRequestsFn(function, None, function)
+        self.do_test_getMergeRequestsFn('callable', None, 'callable')
 
     # _mergeRequests
 
@@ -477,7 +489,7 @@ class TestBuilderBuildCreation(unittest.TestCase):
         yield wfd
         brdicts = wfd.getResult()
 
-        def mergeRequests_fn(breq, other):
+        def mergeRequests_fn(builder, breq, other):
             # merge evens with evens, odds with odds
             return breq.id % 2 == other.id % 2
 
