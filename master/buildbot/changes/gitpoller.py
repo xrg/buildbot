@@ -30,7 +30,7 @@ class GitPoller(base.PollingChangeSource):
     compare_attrs = ["repourl", "branch", "workdir",
                      "pollInterval", "gitbin", "usetimestamps",
                      "remoteName",
-                     "category", "project"]
+                     "category", "project", "bare"]
                      
     def __init__(self, repourl, branch='master', 
                  workdir=None, pollInterval=10*60, 
@@ -38,7 +38,7 @@ class GitPoller(base.PollingChangeSource):
                  category=None, project=None,
                  pollinterval=-2, fetch_refspec=None,
                  localBranch=None, remoteName='origin',
-                 encoding='utf-8'):
+                 encoding='utf-8', bare=False):
         # for backward compatibility; the parameter used to be spelled with 'i'
         if pollinterval != -2:
             pollInterval = pollinterval
@@ -61,6 +61,7 @@ class GitPoller(base.PollingChangeSource):
         self.remoteName = remoteName
         self.localBranch = localBranch or branch
         self.initLock = defer.DeferredLock()
+        self.bare = bare
         
         if self.workdir == None:
             self.workdir = tempfile.gettempdir() + '/gitpoller_work'
@@ -76,11 +77,24 @@ class GitPoller(base.PollingChangeSource):
         # initialize the repository we'll use to get changes; note that
         # startService is not an event-driven method, so this method will
         # instead acquire self.initLock immediately when it is called.
-        if not os.path.exists(self.workdir + r'/.git'):
-            d = self.initRepository()
-            d.addErrback(log.err, 'while initializing GitPoller repository')
+        if os.path.exists(self.workdir + r'/.git'):
+            if self.bare:
+                log.msg("gitpoller: workdir %s is not bare, switching off option" % \
+                        self.workdir)
+                self.bare = False
+            log.msg("GitPoller workdir repository already exists")
+            d = self.setupRepository()
+            d.addErrback(log.err, 'while setup GitPoller repository')
+        
+        elif self.bare and os.path.isdir(self.workdir + '/objects/info') \
+                and os.path.exists(self.workdir + '/config'):
+            log.msg("GitPoller bare repository already exists")
+            d = self.setupRepository()
+            d.addErrback(log.err, 'while setup GitPoller repository')
         else:
-            log.msg("GitPoller repository already exists")
+            d = self.initRepository()
+            d.addCallback(self.setupRepository)
+            d.addErrback(log.err, 'while initializing GitPoller repository')
 
         # call this *after* initRepository, so that the initLock is locked first
         base.PollingChangeSource.startService(self)
@@ -97,21 +111,41 @@ class GitPoller(base.PollingChangeSource):
 
         def git_init(_):
             log.msg('gitpoller: initializing working dir from %s' % self.repourl)
-            d = utils.getProcessOutputAndValue(self.gitbin,
-                    ['init', self.workdir], env=dict(PATH=os.environ['PATH']))
+            args = ['init', self.workdir]
+            if self.bare:
+                args.append('--bare')
+            d = utils.getProcessOutputAndValue(self.gitbin, args, 
+                    env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             return d
         d.addCallback(git_init)
-        
-        def git_remote_add(_):
-            d = utils.getProcessOutputAndValue(self.gitbin,
-                    ['remote', 'add', self.remoteName, self.repourl],
+        return d
+    
+    @deferredLocked('initLock')
+    def setupRepository(self, res=None):
+        d = defer.succeed(res)
+        def git_remote_list(_):
+            """ Get the list of remotes from git
+            """
+            def git_remote_read(res):
+                """ Parses stdout of 'git remote' and finds out if our remote is there
+                """
+                (stdout, stderr, code) = res
+                if code != 0:
+                    return defer.succeed(False)
+                remotes = map(str.strip, stdout.split('\n'))
+                if self.remoteName in remotes:
+                    return defer.succeed(True)
+                else:
+                    return defer.succeed(False)
+            
+            d = utils.getProcessOutputAndValue(self.gitbin, ['remote'],
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
-            d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
+            d.addCallback(git_remote_read)
             return d
-        d.addCallback(git_remote_add)
+        
+        d.addCallback(git_remote_list)
         
         def git_fetch_remote(_):
             args = ['fetch', self.remoteName]
@@ -121,23 +155,39 @@ class GitPoller(base.PollingChangeSource):
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             return d
-        d.addCallback(git_fetch_remote)
         
         def set_master(_):
             log.msg('gitpoller: checking out %s' % self.branch)
-            # FIXME
-            if self.localBranch == 'master': # repo is already on branch 'master', so reset
-                d = utils.getProcessOutputAndValue(self.gitbin,
-                        ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch)],
-                        path=self.workdir, env=dict(PATH=os.environ['PATH']))
+            args = []
+            if self.bare:
+                args = ['branch', self.localBranch, '%s/%s' % (self.remoteName, self.branch)]
+            elif self.localBranch == 'master':
+                # repo is already on branch 'master', so reset
+                args = ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch)]
             else:
-                d = utils.getProcessOutputAndValue(self.gitbin,
-                        ['checkout', '-b', self.localBranch, '%s/%s' % (self.remoteName, self.branch)],
-                        path=self.workdir, env=dict(PATH=os.environ['PATH']))
+                args = ['checkout', '-b', self.localBranch, '%s/%s' % (self.remoteName, self.branch)]
+            
+            d = utils.getProcessOutputAndValue(self.gitbin, args,
+                    path=self.workdir, env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             return d
-        d.addCallback(set_master)
+
+            
+        def git_remote_add(res):
+            if res is True:
+                # TODO: check branch names and reset, if needed
+                return defer.succeed(None)
+            d = utils.getProcessOutputAndValue(self.gitbin,
+                    ['remote', 'add', self.remoteName, self.repourl],
+                    path=self.workdir, env=dict(PATH=os.environ['PATH']))
+            d.addCallback(self._convert_nonzero_to_failure)
+            d.addErrback(self._stop_on_failure)
+            d.addCallback(git_fetch_remote)
+            d.addCallback(set_master)
+            return d
+        d.addCallback(git_remote_add)
+
         def get_rev(_):
             d = utils.getProcessOutputAndValue(self.gitbin,
                     ['rev-parse', self.localBranch],
@@ -305,6 +355,8 @@ class GitPoller(base.PollingChangeSource):
             return
         log.msg('gitpoller: catching up tracking branch')
         args = ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch,)]
+        if self.bare:
+            args[1] = '--soft'
         d = utils.getProcessOutputAndValue(self.gitbin, args, path=self.workdir, env=dict(PATH=os.environ['PATH']))
         d.addCallback(self._convert_nonzero_to_failure)
         return d
