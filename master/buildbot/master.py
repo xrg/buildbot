@@ -176,7 +176,10 @@ class BuildMaster(service.MultiService):
 
     def loadTheConfigFile(self, configFile=None):
         if not configFile:
-            configFile = os.path.join(self.basedir, self.configFileName)
+            if os.path.isabs(self.configFileName):
+                configFile = self.configFileName
+            else:
+                configFile = os.path.join(self.basedir, self.configFileName)
 
         log.msg("Creating BuildMaster -- buildbot.version: %s" % buildbot.version)
         log.msg("loading configuration from %s" % configFile)
