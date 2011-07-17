@@ -160,7 +160,10 @@ class GitPoller(base.PollingChangeSource):
             log.msg('gitpoller: checking out %s' % self.branch)
             args = []
             if self.bare:
-                args = ['branch', self.localBranch, '%s/%s' % (self.remoteName, self.branch)]
+                # We create a branch (no checkout, for bare), but not allow it
+                # to automatically update its head to the remote side
+                args = ['branch', '-f', '--no-track', \
+                        self.localBranch, '%s/%s' % (self.remoteName, self.branch)]
             elif self.localBranch == 'master':
                 # repo is already on branch 'master', so reset
                 args = ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch)]
@@ -173,6 +176,9 @@ class GitPoller(base.PollingChangeSource):
             d.addErrback(self._stop_on_failure)
             return d
 
+        #def git_getlastchange(self, res):
+        #    return self.master.db.changes.getLatestBranchChange(branch=self.branch,
+        #        category=self.category, project=self.project)
             
         def git_remote_add(res):
             if res is True:
@@ -184,6 +190,7 @@ class GitPoller(base.PollingChangeSource):
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             d.addCallback(git_fetch_remote)
+            # d.addCallback(git_getlastchange)
             d.addCallback(set_master)
             return d
         d.addCallback(git_remote_add)
@@ -354,9 +361,12 @@ class GitPoller(base.PollingChangeSource):
             log.msg('gitpoller: no changes, no catch_up')
             return
         log.msg('gitpoller: catching up tracking branch')
-        args = ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch,)]
+        
         if self.bare:
-            args[1] = '--soft'
+            args[1] = ['branch', '-f', '--no-track', \
+                    self.localBranch, '%s/%s' % (self.remoteName, self.branch,)]
+        else:
+            args = ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch,)]
         d = utils.getProcessOutputAndValue(self.gitbin, args, path=self.workdir, env=dict(PATH=os.environ['PATH']))
         d.addCallback(self._convert_nonzero_to_failure)
         return d
