@@ -155,8 +155,44 @@ class GitPoller(base.PollingChangeSource):
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             return d
+
+        #def git_getlastchange(self, res):
+        #    return self.master.db.changes.getLatestBranchChange(branch=self.branch,
+        #        category=self.category, project=self.project)
+            
+        def git_remote_add(res):
+            if res is True:
+                # TODO: check branch names and reset, if needed
+                d = utils.getProcessOutput(self.gitbin,
+                    ['branch', '--no-color'],
+                    path=self.workdir, env=dict(PATH=os.environ['PATH']))
+                d.addCallback(self._init_master)
+                d.addErrback(self._stop_on_failure)
+                return d
+            d = utils.getProcessOutputAndValue(self.gitbin,
+                    ['remote', 'add', self.remoteName, self.repourl],
+                    path=self.workdir, env=dict(PATH=os.environ['PATH']))
+            d.addCallback(self._convert_nonzero_to_failure)
+            d.addErrback(self._stop_on_failure)
+            d.addCallback(git_fetch_remote)
+            # d.addCallback(git_getlastchange)
+            d.addCallback(self._init_master)
+            return d
+        d.addCallback(git_remote_add)
+        d.addCallback(self._get_rev)
+        return d
+
+    def _init_master(self, res=None):
+        """ if res is given, it should be the output of 'git branch', to work incrementaly
+        """
+        currentBranches = []
+        if res is not None:
+            currentBranches = [ b[2:].strip() for b in res.split('\n') ]
         
-        def set_master(_):
+        if self.localBranch in currentBranches:
+            log.msg("gitpoller: local branch %s is already setup" % self.localBranch)
+            return defer.succeed(None)
+        else:
             log.msg('gitpoller: checking out %s' % self.branch)
             args = []
             if self.bare:
@@ -176,34 +212,14 @@ class GitPoller(base.PollingChangeSource):
             d.addErrback(self._stop_on_failure)
             return d
 
-        #def git_getlastchange(self, res):
-        #    return self.master.db.changes.getLatestBranchChange(branch=self.branch,
-        #        category=self.category, project=self.project)
-            
-        def git_remote_add(res):
-            if res is True:
-                # TODO: check branch names and reset, if needed
-                return defer.succeed(None)
-            d = utils.getProcessOutputAndValue(self.gitbin,
-                    ['remote', 'add', self.remoteName, self.repourl],
-                    path=self.workdir, env=dict(PATH=os.environ['PATH']))
-            d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
-            d.addCallback(git_fetch_remote)
-            # d.addCallback(git_getlastchange)
-            d.addCallback(set_master)
-            return d
-        d.addCallback(git_remote_add)
-
-        def get_rev(_):
-            d = utils.getProcessOutputAndValue(self.gitbin,
-                    ['rev-parse', self.localBranch],
-                    path=self.workdir, env={})
-            d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
-            d.addCallback(lambda (out, err, code) : out.strip())
-            return d
-        d.addCallback(get_rev)
+    def _get_rev(self, res):
+        d = utils.getProcessOutputAndValue(self.gitbin,
+                ['rev-parse', self.localBranch],
+                path=self.workdir, env={})
+        d.addCallback(self._convert_nonzero_to_failure)
+        d.addErrback(self._stop_on_failure)
+        d.addCallback(lambda (out, err, code) : out.strip())
+        
         def print_rev(rev):
             log.msg("gitpoller: finished initializing working dir from %s at rev %s"
                     % (self.repourl, rev))
@@ -293,6 +309,7 @@ class GitPoller(base.PollingChangeSource):
                     path=self.workdir,
                     env=dict(PATH=os.environ['PATH']), errortoo=True )
 
+        # TODO perhaps read the output
         return d
 
     @defer.deferredGenerator
@@ -363,7 +380,7 @@ class GitPoller(base.PollingChangeSource):
         log.msg('gitpoller: catching up tracking branch')
         
         if self.bare:
-            args[1] = ['branch', '-f', '--no-track', \
+            args = ['branch', '-f', '--no-track', \
                     self.localBranch, '%s/%s' % (self.remoteName, self.branch,)]
         else:
             args = ['reset', '--hard', '%s/%s' % (self.remoteName, self.branch,)]
