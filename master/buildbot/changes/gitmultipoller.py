@@ -26,12 +26,12 @@ class GitMultiPoller(gitpoller.GitPoller):
 
     compare_attrs = gitpoller.GitPoller.compare_attrs + ['branchSpecs']
 
-    def __init__(self, branchSpecs=False, **kwargs):
+    def __init__(self, branchSpecs=False, allHistory=False, **kwargs):
         """
             @param branchSpecs A list of branch or (branch, localBranch [,props]) ,
                 branches to fetch. If just a string, localBranch will be assumed to be equal.
                 The third, `props` item of the tuple can be a dict to be passed transparently
-                to  _ *-*
+                to _doAddChange()
         """
 
         assert not kwargs.get('branch', False), "You should not specify a (single) branch!"
@@ -53,6 +53,7 @@ class GitMultiPoller(gitpoller.GitPoller):
                 raise TypeError("Can't handle %s in branchSpecs item" % type(branch))
 
         self.branchSpecs = map(str2tuple, branchSpecs)
+        self.allHistory = allHistory
 
     def describe(self):
         status = ""
@@ -108,13 +109,18 @@ class GitMultiPoller(gitpoller.GitPoller):
         """
         currentBranches = []
         if res is not None:
+            assert isinstance(res, basestring), type(res)
             currentBranches = [ b[2:].strip() for b in res.split('\n') ]
 
+        if self.allHistory:
+            self.allHistory = [ localBranch for b, localBranch, p in self.branchSpecs]
         deds = []
         for branch, localBranch, props in self.branchSpecs:
             if localBranch in currentBranches:
                 # we don't need to do anything, branch is here
                 # not even need to update it, because _catch_up will do that
+                if self.allHistory:
+                    self.allHistory.remove(localBranch)
                 continue
 
             args = []
@@ -174,12 +180,43 @@ class GitMultiPoller(gitpoller.GitPoller):
         format_str += self.log_separator_files # but no newline needed here
 
         self.changeCount = 0
+        
+        currentBranches = None
+        if self.allHistory:
+            currentBranches = [ '%s/%s' % (self.remoteName, branch) \
+                                for branch, localBranch, p in self.branchSpecs \
+                                    if localBranch not in self.allHistory]
+            # print "allHistory, already know:", currentBranches
 
         for branch, localBranch, props in self.branchSpecs:
             revListArgs = ['log',] + self.log_arguments + \
-                    [ '--format='+format_str,
-                    '%s..%s/%s' % (localBranch, self.remoteName, branch)]
+                    [ '--format='+format_str,]
+            historic_mode = False
+            if self.allHistory and localBranch in self.allHistory:
+                # so, we need to scan the full history of that branch, rather than
+                # its newer commmits.
+                # We need a starting point, so we'll use the merge base of all other
+                # branches to this
+                historic_mode = True
+                if currentBranches:
+                    d = utils.getProcessOutput(self.gitbin,
+                                    ['merge-base', '--octopus'] + currentBranches, path=self.workdir,
+                                    env=dict(PATH=os.environ['PATH']), errortoo=False )
+                    wfd = defer.waitForDeferred(d)
+                    yield wfd
+                    results = wfd.getResult()
+                    assert results, "No merge-base result"
+                    revListArgs.append('%s..%s/%s' % \
+                            (results.strip(), self.remoteName, branch))
+                else:
+                    # no other branch existed before this, so scan till the dawn of time
+                    revListArgs.append('%s/%s' % (self.remoteName, branch))
+                currentBranches.append('%s/%s' % (self.remoteName, branch)) # mark its contents as known
+                self.allHistory.remove(localBranch)
+            else:
+                revListArgs.append('%s..%s/%s' % (localBranch, self.remoteName, branch))
             # hope it's not too much output ...
+            # print "revListArgs:", ' '.join(revListArgs)
             d = utils.getProcessOutput(self.gitbin, revListArgs, path=self.workdir,
                                     env=dict(PATH=os.environ['PATH']), errortoo=False )
             wfd = defer.waitForDeferred(d)
@@ -248,14 +285,15 @@ class GitMultiPoller(gitpoller.GitPoller):
                     % (self.changeCount, self.workdir, localBranch) )
 
             dl = defer.DeferredList( \
-                [ self._doAddChange(branch=branch, revDict=revDict, props=props)
+                [ self._doAddChange(branch=branch, revDict=revDict,
+                                    historic=historic_mode, props=props) \
                     for revDict in revList])
             wfd = defer.waitForDeferred(dl)
             yield wfd
             wfd.getResult()
         # end for
 
-    def _doAddChange(self, branch, revDict, props=None):
+    def _doAddChange(self, branch, revDict, historic=False, props=None):
         """ add a change from values of revDict
 
             @param branch the branch being examined
@@ -275,7 +313,8 @@ class GitMultiPoller(gitpoller.GitPoller):
                 branch=branch,
                 category=self.category,
                 project=self.project,
-                repository=self.repourl)
+                repository=self.repourl,
+                skip_build=historic)
         return d
 
     def _get_rev(self, res):
