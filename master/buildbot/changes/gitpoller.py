@@ -156,6 +156,8 @@ class GitPoller(base.PollingChangeSource):
             d.addErrback(self._stop_on_failure)
             return d
 
+        def git_skip_output(_):
+            return defer.succeed(None)
         #def git_getlastchange(self, res):
         #    return self.master.db.changes.getLatestBranchChange(branch=self.branch,
         #        category=self.category, project=self.project)
@@ -175,7 +177,7 @@ class GitPoller(base.PollingChangeSource):
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             d.addCallback(git_fetch_remote)
-            # d.addCallback(git_getlastchange)
+            d.addCallback(git_skip_output)
             d.addCallback(self._init_master)
             return d
         d.addCallback(git_remote_add)
