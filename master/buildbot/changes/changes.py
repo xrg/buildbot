@@ -131,9 +131,15 @@ class Change:
             self.revlink = ""
 
     def __str__(self):
+        def trunc_comments(comm):
+            if comm and len(comm) > 40:
+                return comm[:40] + '...'
+            else:
+                return comm
+
         return (u"Change(revision=%r, who=%r, branch=%r, comments=%r, " +
                 u"when=%r, category=%r, project=%r, repository=%r)") % (
-                self.revision, self.who, self.branch, self.comments,
+                self.revision, self.who, self.branch, trunc_comments(self.comments),
                 self.when, self.category, self.project, self.repository)
 
     def asText(self):
