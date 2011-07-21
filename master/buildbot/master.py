@@ -146,6 +146,7 @@ class BuildMaster(service.MultiService):
         # set up the tip of the status hierarchy (must occur after subscription
         # points are initialized)
         self.status = Status(self)
+        self._skip_changes = []
 
     def startService(self):
         # first, apply all monkeypatches
@@ -808,7 +809,7 @@ class BuildMaster(service.MultiService):
     def addChange(self, who=None, files=None, comments=None, author=None,
             isdir=None, is_dir=None, links=None, revision=None, when=None,
             when_timestamp=None, branch=None, category=None, revlink='',
-            properties={}, repository='', project=''):
+            properties={}, repository='', project='', skip_build=False):
         """
         Add a change to the buildmaster and act on it.
 
@@ -868,6 +869,8 @@ class BuildMaster(service.MultiService):
 
         @param project: the project this change is a part of
         @type project: unicode string
+        
+        @param skip_build: do not notify about this change
 
         @returns: L{Change} instance via Deferred
         """
@@ -914,8 +917,14 @@ class BuildMaster(service.MultiService):
             msg = u"added change %s to database" % change
             log.msg(msg.encode('utf-8', 'replace'))
             # only deliver messages immediately if we're not polling
-            if not self.db_poll_interval:
-                self._change_subs.deliver(change)
+            if self.db_poll_interval:
+                if skip_build:
+                    self._skip_changes.append(change.number)
+            else:
+                if skip_build:
+                    log.msg("Skipping deliver of change %d" % change.number)
+                else:
+                    self._change_subs.deliver(change)
             return change
         d.addCallback(notify)
         return d
@@ -1101,6 +1110,9 @@ class BuildMaster(service.MultiService):
 
         while True:
             changeid = self._last_processed_change + 1
+            if changeid in self._skip_changes:
+                self._last_processed_change = changeid
+                continue
             wfd = defer.waitForDeferred(
                 self.db.changes.getChange(changeid))
             yield wfd
@@ -1120,6 +1132,9 @@ class BuildMaster(service.MultiService):
 
             self._last_processed_change = changeid
             need_setState = True
+
+        self._skip_changes = filter(lambda c: c > self._last_processed_change,
+                                    self._skip_changes)
 
         # write back the updated state, if it's changed
         if need_setState:
