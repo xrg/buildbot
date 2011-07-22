@@ -127,11 +127,11 @@ class GitMultiPoller(gitpoller.GitPoller):
             if self.bare:
                 # We create a branch (no checkout, for bare), but not allow it
                 # to automatically update its head to the remote side
-                log.msg('gitpoller: branching from %s/%s' % (self.remoteName, self.branch))
+                log.msg('gitpoller: branching from %s/%s' % (self.remoteName, branch))
                 args = ['branch', '-f', '--no-track', \
                         localBranch, '%s/%s' % (self.remoteName, branch)]
-            elif self.localBranch == 'master':
-                log.msg('gitpoller: checking master from %s/%s' % (self.remoteName, self.branch))
+            elif localBranch == 'master':
+                log.msg('gitpoller: checking master from %s/%s' % (self.remoteName, branch))
                 d = utils.getProcessOutputAndValue(self.gitbin, ['checkout', '-f','master'],
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
                 d.addCallback(self._convert_nonzero_to_failure)
@@ -139,14 +139,18 @@ class GitMultiPoller(gitpoller.GitPoller):
                 deds.append(d)
                 args = ['reset', '--hard', '%s/%s' % (self.remoteName, branch)]
             else:
-                log.msg('gitpoller: checking out %s/%s' % (self.remoteName, self.branch))
-                args = ['checkout', '-b', self.localBranch, '%s/%s' % (self.remoteName, self.branch)]
+                log.msg('gitpoller: checking out %s/%s' % (self.remoteName, branch))
+                args = ['checkout', '-b', localBranch, '%s/%s' % (self.remoteName, branch)]
 
             d = utils.getProcessOutputAndValue(self.gitbin, args,
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
             d.addErrback(self._stop_on_failure)
             deds.append(d)
+        
+        if self.allHistory:
+            log.msg("gitpoller: Still need to get history from %s branch(es)" % \
+                        ', '.join(self.allHistory))
 
         return defer.DeferredList(deds, fireOnOneErrback=True)
 
