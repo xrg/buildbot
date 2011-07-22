@@ -280,7 +280,7 @@ class GitMultiPoller(gitpoller.GitPoller):
 
             # process oldest change first
             if not revList:
-                return
+                continue # with other branches
 
             revList.reverse()
             self.changeCount += len(revList)
