@@ -60,7 +60,7 @@ class GitMultiPoller(gitpoller.GitPoller):
         if not self.master:
             status = "[STOPPED - check log]"
         str = 'GitPoller watching the remote git repository %s, branch(es): %s %s' \
-                % (self.repourl, (', '.join([bs[1] for bs in self.branchSpecs])), status)
+                % (self.repourl, (', '.join([bs[0] for bs in self.branchSpecs])), status)
         return str
 
     def _catch_up(self, res):
@@ -216,7 +216,7 @@ class GitMultiPoller(gitpoller.GitPoller):
             else:
                 revListArgs.append('%s..%s/%s' % (localBranch, self.remoteName, branch))
             # hope it's not too much output ...
-            # print "revListArgs:", ' '.join(revListArgs)
+            # log.msg("gitpoller: revListArgs: %s" % ' '.join(revListArgs))
             d = utils.getProcessOutput(self.gitbin, revListArgs, path=self.workdir,
                                     env=dict(PATH=os.environ['PATH']), errortoo=False )
             wfd = defer.waitForDeferred(d)
