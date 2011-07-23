@@ -54,6 +54,7 @@ class GitMultiPoller(gitpoller.GitPoller):
 
         self.branchSpecs = map(str2tuple, branchSpecs)
         self.allHistory = allHistory
+        self.format_str = None
 
     def describe(self):
         status = ""
@@ -167,9 +168,10 @@ class GitMultiPoller(gitpoller.GitPoller):
 
     log_arguments = ['--first-parent', '--name-only']
 
-    @defer.deferredGenerator
-    def _process_changes(self, unused_output):
-        log.msg("Processing changes in %d branches" % len(self.branchSpecs))
+    def _prepare_format_str(self):
+        """Formulate the format string for 'git log'
+            @return string
+        """
         # first, format the '--format' expression
         format_str = self.log_separator_commit + '%n'
         for key, fmt in self.log_fields.items():
@@ -182,7 +184,14 @@ class GitMultiPoller(gitpoller.GitPoller):
             if fmt.startswith('+'):
                 format_str += '%s:+%%n%s%%n%s%%n' % (key, fmt[1:], self.log_separator_fields)
         format_str += self.log_separator_files # but no newline needed here
-
+        return format_str
+        
+    @defer.deferredGenerator
+    def _process_changes(self, unused_output):
+        log.msg("Processing changes in %d branches" % len(self.branchSpecs))
+        if self.format_str is None:
+            self.format_str = self._prepare_format_str()
+            # would we ever need to change that dynamically?
         self.changeCount = 0
         
         currentBranches = None
@@ -194,7 +203,7 @@ class GitMultiPoller(gitpoller.GitPoller):
 
         for branch, localBranch, props in self.branchSpecs:
             revListArgs = ['log',] + self.log_arguments + \
-                    [ '--format='+format_str,]
+                    [ '--format=' + self.format_str,]
             historic_mode = False
             if self.allHistory and localBranch in self.allHistory:
                 # so, we need to scan the full history of that branch, rather than
@@ -226,7 +235,21 @@ class GitMultiPoller(gitpoller.GitPoller):
             wfd = defer.waitForDeferred(d)
             yield wfd
             results = wfd.getResult()
+            
+            dl = self._parse_log_results(results, branch, localBranch, props, historic_mode)
+            if dl is None:
+                continue
+            
+            assert isinstance(dl, defer.Deferred), type(dl)
+            wfd = defer.waitForDeferred(dl)
+            yield wfd
+            wfd.getResult()
+        # end for
 
+    def _parse_log_results(self, results, branch, localBranch, props, historic_mode):
+        """ Parse the results of 'git log' and add them to db, as needed
+        """
+        if True:
             revList = []
             revDict = None #: current commit being parsed
             bodyField = None #: key of current 'body' field
@@ -280,7 +303,7 @@ class GitMultiPoller(gitpoller.GitPoller):
 
             # process oldest change first
             if not revList:
-                continue # with other branches
+                return None
 
             revList.reverse()
             self.changeCount += len(revList)
@@ -292,10 +315,7 @@ class GitMultiPoller(gitpoller.GitPoller):
                 [ self._doAddChange(branch=branch, revDict=revDict,
                                     historic=historic_mode, props=props) \
                     for revDict in revList])
-            wfd = defer.waitForDeferred(dl)
-            yield wfd
-            wfd.getResult()
-        # end for
+            return dl
 
     def _doAddChange(self, branch, revDict, historic=False, props=None):
         """ add a change from values of revDict
