@@ -246,6 +246,7 @@ class GitMultiPoller(gitpoller.GitPoller):
             wfd.getResult()
         # end for
 
+    @defer.deferredGenerator
     def _parse_log_results(self, results, branch, localBranch, props, historic_mode):
         """ Parse the results of 'git log' and add them to db, as needed
         """
@@ -301,21 +302,21 @@ class GitMultiPoller(gitpoller.GitPoller):
                 revList.append(revDict)
                 revDict = None
 
+        if revList:
             # process oldest change first
-            if not revList:
-                return None
-
             revList.reverse()
             self.changeCount += len(revList)
 
             log.msg('gitpoller: processed %d changes in: "%s" %s'
                     % (self.changeCount, self.workdir, localBranch) )
 
-            dl = defer.DeferredList( \
-                [ self._doAddChange(branch=branch, revDict=revDict,
-                                    historic=historic_mode, props=props) \
-                    for revDict in revList])
-            return dl
+            for revDict in revList:
+                dl = self._doAddChange(branch=branch, revDict=revDict,
+                                    historic=historic_mode, props=props) 
+                wfd = defer.waitForDeferred(dl)
+                yield wfd
+                wfd.getResult()
+        # end _process_changes()
 
     def _doAddChange(self, branch, revDict, historic=False, props=None):
         """ add a change from values of revDict
