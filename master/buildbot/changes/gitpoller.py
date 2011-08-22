@@ -88,7 +88,7 @@ class GitPoller(base.PollingChangeSource):
         
         elif self.bare and os.path.isdir(self.workdir + '/objects/info') \
                 and os.path.exists(self.workdir + '/config'):
-            log.msg("GitPoller bare repository already exists")
+            log.msg('GitPoller bare repository already exists at %s' % self.workdir)
             d = self.setupRepository()
             d.addErrback(log.err, 'while setup GitPoller repository')
         else:
