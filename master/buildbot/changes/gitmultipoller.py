@@ -32,6 +32,12 @@ class GitMultiPoller(gitpoller.GitPoller):
                 branches to fetch. If just a string, localBranch will be assumed to be equal.
                 The third, `props` item of the tuple can be a dict to be passed transparently
                 to _doAddChange()
+
+            A special case is when branch is False, props['last_head'] is hash, that
+            we may skip fetching from remote side and instead only poll the
+            last_head..localBranch history of commits. last_head will be updated
+            in-place and /may/ point to a few commits before last known change,
+            at the beginning. The algoritm should catch up in that case.
         """
 
         assert not kwargs.get('branch', False), "You should not specify a (single) branch!"
@@ -60,9 +66,16 @@ class GitMultiPoller(gitpoller.GitPoller):
         status = ""
         if not self.master:
             status = "[STOPPED - check log]"
-        str = 'GitPoller watching the remote git repository %s, branch(es): %s %s' \
-                % (self.repourl, (', '.join([bs[0] for bs in self.branchSpecs])), status)
-        return str
+        
+        local_branches = [ '[%s]' % bs[1] for bs in self.branchSpecs if not bs[0]]
+        if local_branches:
+            str2 = ', '.join(local_branches)
+        else:
+            str2 = ''
+        str1 = 'GitPoller watching the remote git repository %s, branch(es): %s %s %s' \
+                % (self.repourl, (', '.join([bs[0] for bs in self.branchSpecs if bs[0]])),
+                    str2, status)
+        return str1
 
     def _catch_up(self, res):
         if self.changeCount == 0:
@@ -91,12 +104,15 @@ class GitMultiPoller(gitpoller.GitPoller):
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
             return d
-
+        
         deds = []
         for branch, localBranch, props in self.branchSpecs:
             # Note, always doing it the "bare" way, so that we don't need
             # to checkout branches all the time
-            if self.bare:
+            if not branch:
+                # We do *not* catch up for local-polled branches
+                d = defer.succeed(None)
+            elif self.bare:
                 d = _set_branch(None, branch, localBranch)
             else:
                 d = _checkout_branch(None, localBranch)
@@ -120,12 +136,19 @@ class GitMultiPoller(gitpoller.GitPoller):
             if localBranch in currentBranches:
                 # we don't need to do anything, branch is here
                 # not even need to update it, because _catch_up will do that
-                if self.allHistory:
+                if self.allHistory and (branch or ('last_head' in props)):
                     self.allHistory.remove(localBranch)
                 continue
 
             args = []
-            if self.bare:
+            if not branch:
+                if 'last_head' in props:
+                    log.msg('gitpoller: branching from %s' % props['last_head'][:12])
+                    args = ['branch', '-f', localBranch, props['last_head']]
+                else:
+                    log.err("gitpoller: have no known hash for local-polled \"%s\" branch" % localBranch)
+                    continue
+            elif self.bare:
                 # We create a branch (no checkout, for bare), but not allow it
                 # to automatically update its head to the remote side
                 log.msg('gitpoller: branching from %s/%s' % (self.remoteName, branch))
@@ -196,9 +219,14 @@ class GitMultiPoller(gitpoller.GitPoller):
         
         currentBranches = None
         if self.allHistory:
-            currentBranches = [ '%s/%s' % (self.remoteName, branch) \
-                                for branch, localBranch, p in self.branchSpecs \
-                                    if localBranch not in self.allHistory]
+            currentBranches = []
+            for branch, localBranch, props in self.branchSpecs:
+                if localBranch in self.allHistory:
+                    pass
+                elif branch:
+                    currentBranches.append('%s/%s' % (self.remoteName, branch))
+                elif 'last_head' in props:
+                    currentBranches.append(props['last_head'])
             # print "allHistory, already know:", currentBranches
 
         for branch, localBranch, props in self.branchSpecs:
@@ -219,15 +247,29 @@ class GitMultiPoller(gitpoller.GitPoller):
                     yield wfd
                     results = wfd.getResult()
                     assert results, "No merge-base result"
-                    revListArgs.append('%s..%s/%s' % \
-                            (results.strip(), self.remoteName, branch))
+                    if branch:
+                        revListArgs.append('%s..%s/%s' % \
+                                (results.strip(), self.remoteName, branch))
+                    else:
+                        revListArgs.append('%s..%s' % (results.strip(), localBranch))
                 else:
                     # no other branch existed before this, so scan till the dawn of time
-                    revListArgs.append('%s/%s' % (self.remoteName, branch))
-                currentBranches.append('%s/%s' % (self.remoteName, branch)) # mark its contents as known
+                    if branch:
+                        revListArgs.append('%s/%s' % (self.remoteName, branch))
+                    else:
+                        revListArgs.append(localBranch)
+                if branch:
+                    currentBranches.append('%s/%s' % (self.remoteName, branch)) # mark its contents as known
+                else:
+                    currentBranches.append(localBranch)
                 self.allHistory.remove(localBranch)
-            else:
+            elif branch:
                 revListArgs.append('%s..%s/%s' % (localBranch, self.remoteName, branch))
+            elif 'last_head' in props:
+                revListArgs.append('%s..%s' % (props['last_head'], localBranch))
+            else:
+                log.err('gitpoller: cannot scan branch %s, no last_head' % localBranch)
+                
             # hope it's not too much output ...
             # log.msg("gitpoller: revListArgs: %s" % ' '.join(revListArgs))
             d = utils.getProcessOutput(self.gitbin, revListArgs, path=self.workdir,
@@ -246,7 +288,7 @@ class GitMultiPoller(gitpoller.GitPoller):
             wfd.getResult()
         # end for
 
-    @defer.deferredGenerator
+    @defer.inlineCallbacks
     def _parse_log_results(self, results, branch, localBranch, props, historic_mode):
         """ Parse the results of 'git log' and add them to db, as needed
         """
@@ -311,11 +353,14 @@ class GitMultiPoller(gitpoller.GitPoller):
                     % (self.changeCount, self.workdir, localBranch) )
 
             for revDict in revList:
-                dl = self._doAddChange(branch=branch, revDict=revDict,
-                                    historic=historic_mode, props=props) 
-                wfd = defer.waitForDeferred(dl)
-                yield wfd
-                wfd.getResult()
+                chg = yield self._doAddChange(branch=branch or localBranch,
+                                    revDict=revDict,
+                                    historic=historic_mode, props=props)
+                assert chg
+                if (not branch) and 'hash' in revDict:
+                    # since props is a dict, this assignment should propagate
+                    # up to self.branchSpecs
+                    props['last_head'] = revDict['hash']
         # end _process_changes()
 
     def _doAddChange(self, branch, revDict, historic=False, props=None):
