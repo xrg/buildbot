@@ -694,6 +694,9 @@ class StartOptions(MakerBase):
     optFlags = [
         ['quiet', 'q', "Don't display startup log messages"],
         ]
+    optParameters = [
+        ['timeout', 't', None, "Wait for server to startup that many seconds"]
+        ]
     def getSynopsis(self):
         return "Usage:    buildbot start [<basedir>]"
 
@@ -713,6 +716,9 @@ class ReconfigOptions(MakerBase):
 class RestartOptions(MakerBase):
     optFlags = [
         ['quiet', 'q', "Don't display startup log messages"],
+        ]
+    optParameters = [
+        ['timeout', 't', None, "Wait for server to startup that many seconds"]
         ]
     def getSynopsis(self):
         return "Usage:    buildbot restart [<basedir>]"

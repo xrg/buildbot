@@ -17,12 +17,15 @@
 import os, sys, time
 
 class Follower:
-    def follow(self):
+    def follow(self, timeout=None):
         from twisted.internet import reactor
         from buildbot.scripts.logwatcher import LogWatcher
         self.rc = 0
         print "Following twistd.log until startup finished.."
         lw = LogWatcher("twistd.log")
+        if timeout is not None:
+            lw.TIMEOUT_DELAY = float(timeout)
+        self.timeout = lw.TIMEOUT_DELAY
         d = lw.start()
         d.addCallbacks(self._success, self._failure)
         reactor.run()
@@ -40,13 +43,13 @@ class Follower:
              ReconfigError, BuildslaveTimeoutError, BuildSlaveDetectedError
         if why.check(BuildmasterTimeoutError):
             print """
-The buildmaster took more than 10 seconds to start, so we were unable to
+The buildmaster took more than %d seconds to start, so we were unable to
 confirm that it started correctly. Please 'tail twistd.log' and look for a
 line that says 'configuration update complete' to verify correct startup.
-"""
+""" % int(self.timeout)
         elif why.check(BuildslaveTimeoutError):
             print """
-The buildslave took more than 10 seconds to start and/or connect to the
+The buildslave took more than %d seconds to start and/or connect to the
 buildmaster, so we were unable to confirm that it started and connected
 correctly. Please 'tail twistd.log' and look for a line that says 'message
 from master: attached' to verify correct startup. If you see a bunch of
@@ -56,7 +59,7 @@ not be running. If you see messages like
    'Failure: twisted.cred.error.UnauthorizedLogin'
 then your buildslave might be using the wrong botname or password. Please
 correct these problems and then restart the buildslave.
-"""
+""" % int(self.timeout)
         elif why.check(ReconfigError):
             print """
 The buildmaster appears to have encountered an error in the master.cfg config
@@ -97,7 +100,10 @@ def start(config):
     # logfile
     if os.fork():
         # this is the parent
-        rc = Follower().follow()
+        timeout = None
+        if 'timeout' in config and config['timeout']:
+            timeout = float(config['timeout'])
+        rc = Follower().follow(timeout=timeout)
         sys.exit(rc)
     # this is the child: give the logfile-watching parent a chance to start
     # watching it before we start the daemon
