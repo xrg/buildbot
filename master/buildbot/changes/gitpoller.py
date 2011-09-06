@@ -84,17 +84,17 @@ class GitPoller(base.PollingChangeSource):
                 self.bare = False
             log.msg("GitPoller workdir repository already exists")
             d = self.setupRepository()
-            d.addErrback(log.err, 'while setup GitPoller repository')
+            d.addErrback(self._stop_on_failure, 'while setup GitPoller repository')
         
         elif self.bare and os.path.isdir(self.workdir + '/objects/info') \
                 and os.path.exists(self.workdir + '/config'):
             log.msg('GitPoller bare repository already exists at %s' % self.workdir)
             d = self.setupRepository()
-            d.addErrback(log.err, 'while setup GitPoller repository')
+            d.addErrback(self._stop_on_failure, 'while setup GitPoller repository')
         else:
             d = self.initRepository()
             d.addCallback(self.setupRepository)
-            d.addErrback(log.err, 'while initializing GitPoller repository')
+            d.addErrback(self._stop_on_failure, 'while initializing GitPoller repository')
 
         # call this *after* initRepository, so that the initLock is locked first
         base.PollingChangeSource.startService(self)
@@ -117,7 +117,7 @@ class GitPoller(base.PollingChangeSource):
             d = utils.getProcessOutputAndValue(self.gitbin, args, 
                     env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
+            d.addErrback(self._stop_on_failure, 'while initializing working dir')
             return d
         d.addCallback(git_init)
         return d
@@ -153,7 +153,7 @@ class GitPoller(base.PollingChangeSource):
             d = utils.getProcessOutputAndValue(self.gitbin, args,
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
+            d.addErrback(self._stop_on_failure, 'while fetching from remote')
             return d
 
         def git_skip_output(_):
@@ -169,16 +169,17 @@ class GitPoller(base.PollingChangeSource):
                     ['branch', '--no-color'],
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
                 d.addCallback(self._init_master)
-                d.addErrback(self._stop_on_failure)
+                d.addErrback(self._stop_on_failure, 'while listing branches')
                 return d
             d = utils.getProcessOutputAndValue(self.gitbin,
                     ['remote', 'add', self.remoteName, self.repourl],
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
+            print 'remote add', self.remoteName, self.repourl
             d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
             d.addCallback(git_fetch_remote)
             d.addCallback(git_skip_output)
             d.addCallback(self._init_master)
+            d.addErrback(self._stop_on_failure, 'adding remote')
             return d
         d.addCallback(git_remote_add)
         d.addCallback(self._get_rev)
@@ -211,7 +212,7 @@ class GitPoller(base.PollingChangeSource):
             d = utils.getProcessOutputAndValue(self.gitbin, args,
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
+            d.addErrback(self._stop_on_failure, "while checking out: %s" %(' '.join(args[:3])))
             return d
 
     def _get_rev(self, res):
@@ -219,7 +220,7 @@ class GitPoller(base.PollingChangeSource):
                 ['rev-parse', self.localBranch],
                 path=self.workdir, env={})
         d.addCallback(self._convert_nonzero_to_failure)
-        d.addErrback(self._stop_on_failure)
+        d.addErrback(self._stop_on_failure, 'while rev-parse')
         d.addCallback(lambda (out, err, code) : out.strip())
         
         def print_rev(rev):
@@ -403,8 +404,10 @@ class GitPoller(base.PollingChangeSource):
             raise EnvironmentError('command failed with exit code %d: %s' % (code, stderr))
         return (stdout, stderr, code)
 
-    def _stop_on_failure(self, f):
+    def _stop_on_failure(self, f, message=None):
         "utility method to stop the service when a failure occurs"
+        if message:
+            log.err(f, message)
         if self.running:
             d = defer.maybeDeferred(lambda : self.stopService())
             d.addErrback(log.err, 'while stopping broken GitPoller service')

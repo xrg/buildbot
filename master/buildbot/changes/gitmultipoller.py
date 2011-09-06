@@ -117,6 +117,7 @@ class GitMultiPoller(gitpoller.GitPoller):
             else:
                 d = _checkout_branch(None, localBranch)
                 d.addCallback(_reset_branch, branch=branch)
+            d.addErrback(self._catch_up_failure)
             deds.append(d)
 
         return defer.DeferredList(deds)
@@ -159,7 +160,7 @@ class GitMultiPoller(gitpoller.GitPoller):
                 d = utils.getProcessOutputAndValue(self.gitbin, ['checkout', '-f','master'],
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
                 d.addCallback(self._convert_nonzero_to_failure)
-                d.addErrback(self._stop_on_failure)
+                d.addErrback(self._stop_on_failure, 'checking out master')
                 deds.append(d)
                 args = ['reset', '--hard', '%s/%s' % (self.remoteName, branch)]
             else:
@@ -169,7 +170,7 @@ class GitMultiPoller(gitpoller.GitPoller):
             d = utils.getProcessOutputAndValue(self.gitbin, args,
                     path=self.workdir, env=dict(PATH=os.environ['PATH']))
             d.addCallback(self._convert_nonzero_to_failure)
-            d.addErrback(self._stop_on_failure)
+            d.addErrback(self._stop_on_failure, 'initializing: git %s' %( ' '.join(args)))
             deds.append(d)
         
         if self.allHistory:
