@@ -240,6 +240,7 @@ class GitMultiPoller(gitpoller.GitPoller):
                 # We need a starting point, so we'll use the merge base of all other
                 # branches to this
                 historic_mode = True
+                start_commit = False
                 if currentBranches:
                     d = utils.getProcessOutput(self.gitbin,
                                     ['merge-base', '--octopus'] + currentBranches, path=self.workdir,
@@ -247,12 +248,16 @@ class GitMultiPoller(gitpoller.GitPoller):
                     wfd = defer.waitForDeferred(d)
                     yield wfd
                     results = wfd.getResult()
-                    assert results, "No merge-base result"
+                    
+                    if results:
+                        start_commit = results.strip()
+
+                if start_commit:
                     if branch:
                         revListArgs.append('%s..%s/%s' % \
-                                (results.strip(), self.remoteName, branch))
+                                (start_commit, self.remoteName, branch))
                     else:
-                        revListArgs.append('%s..%s' % (results.strip(), localBranch))
+                        revListArgs.append('%s..%s' % (start_commit, localBranch))
                 else:
                     # no other branch existed before this, so scan till the dawn of time
                     if branch:
