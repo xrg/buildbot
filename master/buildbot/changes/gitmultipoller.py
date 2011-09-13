@@ -72,7 +72,7 @@ class GitMultiPoller(gitpoller.GitPoller):
             str2 = ', '.join(local_branches)
         else:
             str2 = ''
-        str1 = 'GitPoller watching the remote git repository %s, branch(es): %s %s %s' \
+        str1 = 'GitPoller watching %s, branch(es): %s %s %s' \
                 % (self.repourl, (', '.join([bs[0] for bs in self.branchSpecs if bs[0]])),
                     str2, status)
         return str1
