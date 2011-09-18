@@ -67,7 +67,10 @@ class MasterShellCommand(BuildStep):
             self.step.stdio_log.addStderr(data)
 
         def processEnded(self, status_object):
-            self.step.stdio_log.addHeader("exit status %d\n" % status_object.value.exitCode)
+            if status_object.value.exitCode is None or status_object.value.exitCode is False:
+                self.step.stdio_log.addHeader("no exit status (aborted?)\n")
+            else:
+                self.step.stdio_log.addHeader("exit status %d\n" % (status_object.value.exitCode or 0))
             self.step.processEnded(status_object)
 
     def start(self):
@@ -114,7 +117,7 @@ class MasterShellCommand(BuildStep):
 
     def processEnded(self, status_object):
         if status_object.value.exitCode != 0:
-            self.step_status.setText(["failed (%d)" % status_object.value.exitCode])
+            self.step_status.setText(["failed (%d)" % (status_object.value.exitCode or -1)])
             self.finished(FAILURE)
         else:
             self.step_status.setText(list(self.descriptionDone))
