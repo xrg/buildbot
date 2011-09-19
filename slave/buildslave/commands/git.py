@@ -65,6 +65,7 @@ class Git(SourceBaseCommand):
 
     def _dovccmd(self, command, cb=None, **kwargs):
         git = self.getCommand("git")
+        kwargs['keepStderr'] = True
         c = runprocess.RunProcess(self.builder, [git] + command, self._fullSrcdir(),
                          sendRC=False, timeout=self.timeout,
                          maxTime=self.maxTime, usePTY=False, **kwargs)
@@ -125,7 +126,7 @@ class Git(SourceBaseCommand):
         if hasattr(self.command, 'stderr'):
             if "Couldn't find remote ref" in self.command.stderr:
                 raise AbandonChain(-1)
-            if self.submodules and 'Unable to checkout' in self.command.sterr:
+            if self.submodules and 'Unable to checkout' in self.command.stderr:
                 raise AbandonChain(-1)
 
     # Update first runs "git clean", removing local changes,
